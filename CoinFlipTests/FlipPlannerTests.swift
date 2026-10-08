@@ -10,4 +10,17 @@ final class FlipPlannerTests: XCTestCase {
     func testSetupWorks() {
         XCTAssertTrue(true, "测试环境运行正常")
     }
+
+    func testOppositeOfSunIsMoon() {
+        XCTAssertEqual(CoinFace.sun.opposite, .moon)
+    }
+
+    func testOppositeOfMoonIsSun() {
+        XCTAssertEqual(CoinFace.moon.opposite, .sun)
+    }
+
+    func testRawValues() {
+        XCTAssertEqual(CoinFace.sun.rawValue, "sun")
+        XCTAssertEqual(CoinFace.moon.rawValue, "moon")
+    }
 }
