@@ -156,11 +156,11 @@ struct CoinSceneView: View {
         var material = PhysicallyBasedMaterial()
         // 这个场景里没有环境可供反射，所以金属度调低、靠灯光打出高光，
         // 看起来反而更像有光泽的金属。T23 调手感时可以再试别的数值。
-        material.metallic = 0.18
-        material.roughness = 0.32
+        material.metallic = 0.22
+        material.roughness = 0.38
 
         if let texture = try? TextureResource.load(named: name) {
-            material.baseColor = .init(tint: .white, texture: .init(texture))
+            material.baseColor = .init(tint: UIColor(white: 0.62, alpha: 1), texture: .init(texture))
         } else {
             // 贴图万一加载不了，退回纯银色，至少还能看到硬币
             material.baseColor = .init(tint: UIColor(white: 0.78, alpha: 1))
@@ -171,8 +171,8 @@ struct CoinSceneView: View {
     /// 侧边：没有图案的抛光银
     private func edgeMaterial() -> RealityKit.Material {
         var material = PhysicallyBasedMaterial()
-        material.baseColor = .init(tint: UIColor(white: 0.62, alpha: 1))
-        material.metallic = 0.25
+        material.baseColor = .init(tint: UIColor(white: 0.46, alpha: 1))
+        material.metallic = 0.3
         material.roughness = 0.22
         return material
     }
@@ -185,20 +185,20 @@ struct CoinSceneView: View {
         let rig = Entity()
 
         let key = DirectionalLight()
-        key.light.intensity = 4200
+        key.light.intensity = 1500
         key.light.color = .white
         key.look(at: .zero, from: [-1.1, 1.5, 1.6], relativeTo: nil)
         rig.addChild(key)
 
         let fill = DirectionalLight()
-        fill.light.intensity = 1400
+        fill.light.intensity = 420
         fill.light.color = UIColor(red: 0.84, green: 0.89, blue: 1.0, alpha: 1)
         fill.look(at: .zero, from: [1.5, -1.0, 1.1], relativeTo: nil)
         rig.addChild(fill)
 
         // 正前方一盏柔光，保证硬币整体不发暗
         let front = DirectionalLight()
-        front.light.intensity = 900
+        front.light.intensity = 260
         front.light.color = .white
         front.look(at: .zero, from: [0, 0.2, 2.0], relativeTo: nil)
         rig.addChild(front)

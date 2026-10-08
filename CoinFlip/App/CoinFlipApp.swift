@@ -1,10 +1,10 @@
-// App 入口。对应任务 T14。
+// App 入口。对应任务 T14、T15。
 //
-// 到这一步，画面开始听"大脑"（CoinController）的了：
-// 启动时读取上次的结果，硬币就显示那一面。
+// 画面听"大脑"（CoinController）的：启动时读取上次结果，硬币就显示那一面。
+// 手势由盖在 3D 画面之上的透明板接收。
 //
-// 开发版底部有一行小字，显示当前状态和结果，方便核对。
-// 正式版（Release）不会有这行字，符合需求"界面无文字"的要求。
+// 开发版底部有一行小字显示状态，正式版（Release）没有，
+// 符合需求"界面无文字"的要求。
 
 import SwiftUI
 
@@ -22,8 +22,16 @@ struct RootView: View {
     /// 大脑。画面只问它"现在该显示哪一面"，不自己做决定。
     @State private var controller = CoinController()
 
-    /// 最近一次上划的速度，只给调试信息条用。T15 才会真正填进来。
+    /// 最近一次有效上划的速度，显示在调试信息条上
     @State private var lastSpeed: Double = 0
+
+    #if DEBUG
+    /// 一共收到过几次拖动（不管算不算上划）。
+    /// 它和"速度"配合着看，能分清问题出在哪：
+    ///   手势数一直是 0  → 触摸根本没传到手势层
+    ///   手势数在涨但速度不动 → 收到了，但没过上划的门槛
+    @State private var dragCount = 0
+    #endif
 
     var body: some View {
         ZStack {
@@ -31,11 +39,28 @@ struct RootView: View {
 
             CoinSceneView(face: controller.phase.currentFace)
 
+            // 透明手势板，盖在 3D 画面之上
+            SwipeCatcher { translation, velocity in
+                #if DEBUG
+                dragCount += 1
+                #endif
+                if case .swipeUp(let speed) = SwipeDetector.evaluate(
+                    translation: translation, velocity: velocity
+                ) {
+                    // T15 先只显示速度，确认手势识别准不准。
+                    // T16 会在这里真正调用 controller.requestFlip(speed:)。
+                    lastSpeed = speed
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea()
+
             #if DEBUG
             VStack {
                 Spacer()
-                DebugBar(phase: controller.phase, speed: lastSpeed)
+                DebugBar(phase: controller.phase, speed: lastSpeed, dragCount: dragCount)
             }
+            .allowsHitTesting(false)        // 信息条不抢手势
             #endif
         }
         .statusBarHidden(true)
@@ -51,9 +76,10 @@ private struct DebugBar: View {
 
     let phase: CoinPhase
     let speed: Double
+    let dragCount: Int
 
     var body: some View {
-        Text("状态：\(phaseText) ｜ 结果：\(resultText) ｜ 速度：\(Int(speed))")
+        Text("状态：\(phaseText) ｜ 结果：\(resultText) ｜ 速度：\(Int(speed)) ｜ 手势：\(dragCount)")
             .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(.gray)
             .padding(.bottom, 10)
