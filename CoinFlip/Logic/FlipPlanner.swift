@@ -3,8 +3,7 @@
 // 它只做决定和计算，不碰画面、声音、震动。
 // 这样以后换画面、换音效，都不用动这里的代码。
 //
-// 已完成：T07 随机器、T08 半圈数修正、T09 生成时间表
-// 待添加：T10 结果一致性检查
+// 已完成：T07 随机器、T08 半圈数修正、T09 生成时间表、T10 结果一致性检查
 
 import Foundation
 
@@ -104,6 +103,20 @@ enum FlipPlanner {
                         landTime: landTime,
                         bounceHeight: bounceHeight,
                         endTime: endTime)
+    }
+
+    // MARK: - 动画结束时朝上的是哪一面（T10）
+
+    /// 按时间表演完之后，朝上的会是哪一面。
+    ///
+    /// 只看两件事：抛之前是哪面、一共翻了几个半圈。
+    /// 翻偶数个半圈又转回原来那面，翻奇数个半圈就换到另一面。
+    ///
+    /// 这个函数本身不参与抛硬币，它存在的意义是**反过来检查**：
+    /// 用它算出的面，必须永远等于时间表里预先决定的 result。
+    /// 一旦有人改坏了动画逻辑，测试就会立刻发现。
+    static func finalFace(of plan: FlipPlan) -> CoinFace {
+        plan.halfTurns % 2 == 0 ? plan.startFace : plan.startFace.opposite
     }
 
     // MARK: - 小工具
