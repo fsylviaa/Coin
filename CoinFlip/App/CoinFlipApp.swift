@@ -1,6 +1,7 @@
-// App 入口：启动后显示的第一个画面。
-// 目前只是全屏黑色背景；开发版底部有一行灰色小字，用来确认脚手架运行成功。
-// 正式版（Release）不会显示这行字。
+// App 入口。
+//
+// 目前（T13）只做一件事：全屏黑底，中央显示一枚静止的银币。
+// 上划、声音、震动在后面的任务里加。
 
 import SwiftUI
 
@@ -14,21 +15,17 @@ struct CoinFlipApp: App {
 }
 
 struct RootView: View {
+
+    /// T13 暂时写死显示日面。
+    /// T14 会换成由 CoinController 决定，这里就不再写死了。
+    private let face: CoinFace = .sun
+
     var body: some View {
         ZStack {
-            Color.black
-                .ignoresSafeArea()
-
-            #if DEBUG
-            VStack {
-                Spacer()
-                Text("CoinFlip 脚手架运行成功")
-                    .font(.footnote)
-                    .foregroundStyle(.gray)
-                    .padding(.bottom, 24)
-            }
-            #endif
+            Color.black.ignoresSafeArea()
+            CoinSceneView(face: face)
         }
         .statusBarHidden(true)
+        .persistentSystemOverlays(.hidden)
     }
 }

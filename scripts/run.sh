@@ -15,13 +15,15 @@ xcodebuild build \
 
 APP_PATH="build/Build/Products/Debug-iphonesimulator/CoinFlip.app"
 
-echo "==> [2/3] 启动模拟器「$SIM_NAME」"
+echo "==> [2/3] 启动模拟器: $SIM_NAME"
 xcrun simctl boot "$SIM_ID" 2>/dev/null || true
-open -a Simulator
+open_simulator_app
+# 等模拟器开机完成，否则装 App 会失败
+xcrun simctl bootstatus "$SIM_ID" -b >/dev/null 2>&1 || true
 
 echo "==> [3/3] 安装并打开 App"
 xcrun simctl install "$SIM_ID" "$APP_PATH"
 xcrun simctl launch "$SIM_ID" com.coinflip.app.dev >/dev/null
 
 echo ""
-echo "✅ App 已在模拟器中打开：应看到全黑屏幕，底部一行灰色小字「CoinFlip 脚手架运行成功」"
+echo "✅ App 已在模拟器中打开。若没看到模拟器窗口，请点一下程序坞里的「Simulator」。"

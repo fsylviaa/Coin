@@ -141,9 +141,23 @@ def moon_motif(d: ImageDraw.ImageDraw, v: int):
                    (x - s, y), (x - s * 0.32, y - s * 0.32)], fill=v)
 
 
+def circular_alpha() -> Image.Image:
+    """
+    做一张圆形的透明遮罩：圆内不透明、圆外透明。
+    贴图是正方形的，但硬币是圆的，所以四个角要挖掉，
+    否则会看到一个方块边缘。
+    """
+    mask = Image.new("L", (SIZE * 4, SIZE * 4), 0)
+    ImageDraw.Draw(mask).ellipse([0, 0, SIZE * 4 - 1, SIZE * 4 - 1], fill=255)
+    # 先画大图再缩小，边缘才不会有锯齿
+    return mask.resize((SIZE, SIZE), Image.LANCZOS)
+
+
 def make_textures():
+    alpha = circular_alpha()
     for name, motif in [("sun_silver", sun_motif), ("moon_silver", moon_motif)]:
-        img = engrave(silver_base(), motif)
+        img = engrave(silver_base(), motif).convert("RGBA")
+        img.putalpha(alpha)
         path = OUT / f"{name}.png"
         img.save(path, "PNG", optimize=True)
         print(f"  {path.name}  {img.size[0]}x{img.size[1]}  {path.stat().st_size // 1024} KB")

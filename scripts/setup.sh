@@ -23,7 +23,7 @@ check_project
 xcodebuild -list -project CoinFlip.xcodeproj >/dev/null 2>&1 \
   || { echo "❌ 工程文件无法读取，请把下面的输出发给我："; xcodebuild -list -project CoinFlip.xcodeproj 2>&1 | tail -15; exit 1; }
 find_simulator
-echo "    将使用模拟器：$SIM_NAME"
+echo "    将使用模拟器: $SIM_NAME"
 
 echo ""
 echo "✅ 环境准备完成"
