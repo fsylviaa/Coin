@@ -98,7 +98,7 @@ def circular_text(layer: Image.Image, text: str, r: float, height: float, v: int
         glyph = Image.new("L", (px * 2, px * 2), 0)
         ImageDraw.Draw(glyph).text((px, px), ch, font=font, fill=v, anchor="mm")
         # 转到头朝外：字母底边对着圆心
-        glyph = glyph.rotate(-math.degrees(a) + 90, resample=Image.BICUBIC)
+        glyph = glyph.rotate(-math.degrees(a) - 90, resample=Image.BICUBIC)
 
         x, y = polar(r, a)
         layer.paste(glyph, (int(x - px), int(y - px)), glyph)
@@ -179,8 +179,8 @@ def moon_motif(major: Image.Image, fine: Image.Image):
 
 # ─────────────────────────── 组装一面 ───────────────────────────
 
-def build_face(text: str, motif) -> Image.Image:
-    """画出一面的高度图，再打光成成品贴图"""
+def build_face(text: str, motif) -> tuple[Image.Image, Image.Image]:
+    """画出一面的高度图，再产出两张贴图：看得见的彩色图，和描述起伏的法线图"""
     major = new_layer()     # 大块浮雕：外缘、珠圈、文字、图案
     fine = new_layer()      # 细纹：底子上的同心线
     d = ImageDraw.Draw(major)
@@ -208,7 +208,7 @@ def build_face(text: str, motif) -> Image.Image:
     # 中央主图案
     motif(major, fine)
 
-    return light(major, fine)
+    return light(major, fine), normal_map(major, fine)
 
 
 def light(major: Image.Image, fine: Image.Image) -> Image.Image:
@@ -232,9 +232,41 @@ def light(major: Image.Image, fine: Image.Image) -> Image.Image:
     px = base_silver()
     px += shade[:, :, None]
     # 浮雕本身略微压暗，读起来才是金属而不是发光的
-    px -= (np.array(major, dtype=np.float32) / 255)[:, :, None] * 12
+    px -= (np.array(major, dtype=np.float32) / 255)[:, :, None] * 7
 
     img = Image.fromarray(np.clip(px, 0, 255).astype(np.uint8), "RGB").convert("RGBA")
+    img.putalpha(circular_alpha())
+    return img
+
+
+def normal_map(major: Image.Image, fine: Image.Image) -> Image.Image:
+    """
+    把高度图转成"法线图"。
+
+    彩色贴图里的明暗是**画死的**——光从左上来，就永远是左上亮。
+    硬币一翻转，这些高光跟着转，看着就像印上去的花纹，不像刻出来的。
+
+    法线图不存颜色，存的是"这一点的表面朝哪个方向"。有了它，
+    手机就能实时算出每一点该多亮——硬币转到哪，高光就跟着在哪，
+    浮雕才真正"活"起来。
+
+    这是把贴图从"印花"变成"浮雕"最便宜的一步，不用加一个三角形。
+    """
+    major = major.resize((SIZE, SIZE), Image.LANCZOS)
+    fine = fine.resize((SIZE, SIZE), Image.LANCZOS)
+
+    hm = np.array(major.filter(ImageFilter.GaussianBlur(2.2)), dtype=np.float32) / 255
+    hf = np.array(fine.filter(ImageFilter.GaussianBlur(0.9)), dtype=np.float32) / 255
+    height = hm + hf * 0.22                     # 细纹只占一点点起伏
+
+    gy, gx = np.gradient(height)
+    strength = 55.0                             # 浮雕的"深浅"，越大越立体
+    nx, ny, nz = -gx * strength, gy * strength, np.ones_like(gx)
+    norm = np.sqrt(nx * nx + ny * ny + nz * nz)
+    nx, ny, nz = nx / norm, ny / norm, nz / norm
+
+    rgb = np.stack([nx, ny, nz], axis=-1) * 0.5 + 0.5
+    img = Image.fromarray((rgb * 255).astype(np.uint8), "RGB").convert("RGBA")
     img.putalpha(circular_alpha())
     return img
 
@@ -248,7 +280,7 @@ def base_silver() -> np.ndarray:
     px = light_c[None, None, :] * (1 - t)[:, :, None] + dark_c[None, None, :] * t[:, :, None]
 
     # 斜向扫过的一道高光，像镜面反射
-    band = np.exp(-(((xx - yy) / SIZE + 0.18) ** 2) / 0.052) * 26
+    band = np.exp(-(((xx - yy) / SIZE + 0.18) ** 2) / 0.085) * 11
     return px + band[:, :, None]
 
 
@@ -350,10 +382,11 @@ if __name__ == "__main__":
     print("生成贴图：")
     for name, text, motif in [("sun_silver", SUN_TEXT, sun_motif),
                               ("moon_silver", MOON_TEXT, moon_motif)]:
-        img = build_face(text, motif)
-        path = OUT / f"{name}.png"
-        img.save(path, "PNG", optimize=True)
-        print(f"  {path.name}  {img.size[0]}x{img.size[1]}  {path.stat().st_size // 1024} KB")
+        color, normal = build_face(text, motif)
+        for suffix, img in [("", color), ("_normal", normal)]:
+            path = OUT / f"{name}{suffix}.png"
+            img.save(path, "PNG", optimize=True)
+            print(f"  {path.name}  {img.size[0]}x{img.size[1]}  {path.stat().st_size // 1024} KB")
     print("生成音效：")
     make_sounds()
     print("完成。")

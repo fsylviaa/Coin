@@ -327,19 +327,30 @@ struct CoinSceneView: View {
             ?? .generatePlane(width: radius * 2, height: radius * 2)
     }
 
-    /// 带图案的金属面
+    /// 带图案的金属面。
+    ///
+    /// 用了两张贴图：
+    ///   • 彩色图：银面的颜色和图案
+    ///   • 法线图：每一点的表面朝向。有了它，手机才能实时算出
+    ///     "硬币转到这个角度时，这道浮雕该多亮"——高光会跟着硬币走，
+    ///     而不是像印花一样贴死在上面。
     private func faceMaterial(textureNamed name: String) -> RealityKit.Material {
         var material = PhysicallyBasedMaterial()
-        // 这个场景里没有环境可供反射，所以金属度调低、靠灯光打出高光，
-        // 看起来反而更像有光泽的金属。
-        material.metallic = 0.22
-        material.roughness = 0.38
+        material.metallic = 0.42
+        material.roughness = 0.30
 
         if let texture = try? TextureResource.load(named: name) {
-            material.baseColor = .init(tint: UIColor(white: 0.62, alpha: 1),
+            material.baseColor = .init(tint: UIColor(white: 0.70, alpha: 1),
                                        texture: .init(texture))
         } else {
             material.baseColor = .init(tint: UIColor(white: 0.78, alpha: 1))
+        }
+
+        // 法线图要按"方向数据"读，不能当成普通图片，
+        // 否则系统会给它做色彩校正，起伏就全错了。
+        if let normal = try? TextureResource.load(named: name + "_normal",
+                                                  options: .init(semantic: .normal)) {
+            material.normal = .init(texture: .init(normal))
         }
         return material
     }

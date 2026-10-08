@@ -22,6 +22,9 @@ struct CoinFlipApp: App {
 
 struct RootView: View {
 
+    /// App 是在前台、还是被切到后台了
+    @Environment(\.scenePhase) private var scenePhase
+
     /// 大脑。画面只问它"现在该显示哪一面"，不自己做决定。
     @State private var controller = CoinController()
 
@@ -75,6 +78,34 @@ struct RootView: View {
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
         .onAppear { controller.start() }
+        .onChange(of: scenePhase) { _, phase in handle(phase) }
+    }
+}
+
+extension RootView {
+
+    /// 切后台、被来电打断时的处理。对应任务 T22。
+    ///
+    /// 抛到一半被打断，就**立刻落定为这一次已经决定好的结果**：
+    ///   • 不重新随机——结果在上划那一刻就定了，也已经存过档
+    ///   • 不续播动画——回来时直接看到结果，不会接着飞
+    ///   • 立刻停声，并取消还没响的磕碰，免得回到主屏幕还在响
+    ///
+    /// 没在抛的时候切后台，什么都不做，保持原状。
+    private func handle(_ phase: ScenePhase) {
+        switch phase {
+        case .active:
+            // 回到前台：什么都不做。状态已经在离开时处理好了。
+            break
+
+        case .inactive, .background:
+            feedback.stopAll()
+            controller.interrupt()
+            flipStartedAt = nil
+
+        @unknown default:
+            break
+        }
     }
 }
 
