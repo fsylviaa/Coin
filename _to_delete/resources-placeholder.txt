@@ -1,3 +1,0 @@
-Resources 文件夹：放素材文件。
-之后会放：sun_silver.png（日面贴图）、moon_silver.png（月面贴图）、land_silver.wav（落地音效）。
-对应任务：T06。放入素材后，可以删除本占位文件。
