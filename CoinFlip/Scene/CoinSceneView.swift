@@ -45,6 +45,14 @@ enum CoinScene {
     /// 把时间表里的高度（米）换算成场景里的高度
     static let heightScale: Float = 0.85
 
+    // 亮度。整体偏暗或偏亮时，优先调这两个。
+    /// 环境反射的强弱。这是"档位"，每加 1 就亮一倍。
+    static let environmentStops: Float = 1.9
+    /// 所有灯的总亮度倍数。
+    /// 金属几乎不吃这几盏灯，它的明暗主要来自环境反射。
+    /// 灯开大了反而会把亮暗之间填平，硬币就发灰了，所以这个数很小。
+    static let lightGain: Float = 0.35
+
     // 等待时的镜头微动。
     // 硬币是躺在平面上的，自己不该浮起来，所以改成镜头极缓慢地游移，
     // 画面有呼吸感，物理上也说得通。
@@ -103,6 +111,11 @@ struct CoinSceneView: View {
             state.coin = coin
             state.camera = camera
             coin.transform.rotation = Self.restingRotation(for: phase.currentFace)
+
+            // 环境反射。读不出来就跳过，硬币仍由上面那组灯照亮。
+            if let environment = await StudioEnvironment.load() {
+                content.add(StudioEnvironment.makeLight(environment, for: coin))
+            }
 
             // 跟着画面刷新走：每画一帧，系统就调一次这里。
             // 比自己起计时器更准，也不会在没动画时白白耗电。
@@ -336,11 +349,14 @@ struct CoinSceneView: View {
     ///     而不是像印花一样贴死在上面。
     private func faceMaterial(textureNamed name: String) -> RealityKit.Material {
         var material = PhysicallyBasedMaterial()
-        material.metallic = 0.42
-        material.roughness = 0.30
+        // 真正的金属：金属度拉满、表面抛得很光。
+        // 金属不靠自己发亮，全靠映出周围的环境——所以必须配合环境贴图，
+        // 没有环境的时候金属度高反而会死灰一片。
+        material.metallic = 0.98
+        material.roughness = 0.13
 
         if let texture = try? TextureResource.load(named: name) {
-            material.baseColor = .init(tint: UIColor(white: 0.70, alpha: 1),
+            material.baseColor = .init(tint: UIColor(white: 0.96, alpha: 1),
                                        texture: .init(texture))
         } else {
             material.baseColor = .init(tint: UIColor(white: 0.78, alpha: 1))
@@ -358,9 +374,9 @@ struct CoinSceneView: View {
     /// 侧边：没有图案的抛光银
     private func edgeMaterial() -> RealityKit.Material {
         var material = PhysicallyBasedMaterial()
-        material.baseColor = .init(tint: UIColor(white: 0.46, alpha: 1))
-        material.metallic = 0.3
-        material.roughness = 0.22
+        material.baseColor = .init(tint: UIColor(white: 0.88, alpha: 1))
+        material.metallic = 1.0
+        material.roughness = 0.12
         return material
     }
 
@@ -369,23 +385,39 @@ struct CoinSceneView: View {
     private func makeLights() -> Entity {
         let rig = Entity()
 
-        let key = DirectionalLight()
-        key.light.intensity = 1500
-        key.light.color = .white
-        key.look(at: .zero, from: [-1.1, 1.5, 1.6], relativeTo: nil)
-        rig.addChild(key)
+        /// 加一盏灯。角度用"从哪个方向照过来"描述，比写坐标直观。
+        func addLight(azimuth: Float, elevation: Float,
+                      intensity: Float, color: UIColor = .white) {
+            let light = DirectionalLight()
+            light.light.intensity = intensity * CoinScene.lightGain
+            light.light.color = color
+            let a = azimuth * .pi / 180
+            let e = elevation * .pi / 180
+            let from = SIMD3<Float>(sin(a) * cos(e), sin(e), cos(a) * cos(e)) * 4
+            light.look(at: .zero, from: from, relativeTo: nil)
+            rig.addChild(light)
+        }
 
-        let fill = DirectionalLight()
-        fill.light.intensity = 420
-        fill.light.color = UIColor(red: 0.84, green: 0.89, blue: 1.0, alpha: 1)
-        fill.look(at: .zero, from: [1.5, -1.0, 1.1], relativeTo: nil)
-        rig.addChild(fill)
+        // 主灯：左前上方。硬币大部分时候的明暗由它决定。
+        addLight(azimuth: -38, elevation: 42, intensity: 1150)
 
-        let front = DirectionalLight()
-        front.light.intensity = 260
-        front.light.color = .white
-        front.look(at: .zero, from: [0, 0.2, 2.0], relativeTo: nil)
-        rig.addChild(front)
+        // 顶灯：正上方。硬币躺平、镜头俯看特写时，主要靠它照亮图案。
+        addLight(azimuth: 0, elevation: 84, intensity: 620)
+
+        // 两盏侧灯：左右贴着地平线打过来。
+        // 硬币翻滚时，它们会在币面上扫出一道道掠过的高光——
+        // 这是这组灯里最重要的两盏，没有它们金属就是一块死板的灰。
+        addLight(azimuth: -96, elevation: 9, intensity: 760,
+                 color: UIColor(red: 0.92, green: 0.95, blue: 1.0, alpha: 1))
+        addLight(azimuth: 98, elevation: 13, intensity: 700,
+                 color: UIColor(red: 1.0, green: 0.97, blue: 0.92, alpha: 1))
+
+        // 轮廓灯：从硬币后方斜打，勾出边缘的一道亮线，把硬币从黑底里拎出来。
+        addLight(azimuth: 158, elevation: 30, intensity: 540)
+
+        // 补光：右下方很弱的一盏，免得背光那侧黑成一团。
+        addLight(azimuth: 46, elevation: -22, intensity: 230,
+                 color: UIColor(red: 0.86, green: 0.90, blue: 1.0, alpha: 1))
 
         return rig
     }

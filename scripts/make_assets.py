@@ -128,6 +128,13 @@ def sun_motif(major: Image.Image, fine: Image.Image):
         half = math.radians(3.0)
         d.polygon([polar(base, a - half), tip, polar(base, a + half)], fill=205)
 
+    # 一圈很密的细放射线，铺在粗光芒底下，让中间不空
+    fd = ImageDraw.Draw(fine)
+    hair = 150
+    for i in range(hair):
+        a = 2 * math.pi * i / hair
+        fd.line([polar(0.200, a), polar(0.600, a)], fill=255, width=max(2, int(BIG * 0.0013)))
+
     # 中央圆盘，边上围一圈小珠
     r_core = 0.150
     d.ellipse([c - c * r_core, c - c * r_core, c + c * r_core, c + c * r_core], fill=170)
@@ -232,7 +239,7 @@ def light(major: Image.Image, fine: Image.Image) -> Image.Image:
     px = base_silver()
     px += shade[:, :, None]
     # 浮雕本身略微压暗，读起来才是金属而不是发光的
-    px -= (np.array(major, dtype=np.float32) / 255)[:, :, None] * 7
+    px -= (np.array(major, dtype=np.float32) / 255)[:, :, None] * 4
 
     img = Image.fromarray(np.clip(px, 0, 255).astype(np.uint8), "RGB").convert("RGBA")
     img.putalpha(circular_alpha())
@@ -260,7 +267,7 @@ def normal_map(major: Image.Image, fine: Image.Image) -> Image.Image:
     height = hm + hf * 0.22                     # 细纹只占一点点起伏
 
     gy, gx = np.gradient(height)
-    strength = 55.0                             # 浮雕的"深浅"，越大越立体
+    strength = 96.0                             # 浮雕的"深浅"，越大越立体
     nx, ny, nz = -gx * strength, gy * strength, np.ones_like(gx)
     norm = np.sqrt(nx * nx + ny * ny + nz * nz)
     nx, ny, nz = nx / norm, ny / norm, nz / norm
@@ -275,12 +282,12 @@ def base_silver() -> np.ndarray:
     """抛光银的底色：左上偏亮、右下偏暗，中间还有一道柔和的高光带"""
     yy, xx = np.mgrid[0:SIZE, 0:SIZE].astype(np.float32)
     t = (xx + yy) / (2 * SIZE)
-    light_c = np.array([239, 241, 245], dtype=np.float32)
-    dark_c = np.array([150, 155, 165], dtype=np.float32)
+    light_c = np.array([250, 251, 253], dtype=np.float32)
+    dark_c = np.array([214, 218, 226], dtype=np.float32)
     px = light_c[None, None, :] * (1 - t)[:, :, None] + dark_c[None, None, :] * t[:, :, None]
 
     # 斜向扫过的一道高光，像镜面反射
-    band = np.exp(-(((xx - yy) / SIZE + 0.18) ** 2) / 0.085) * 11
+    band = np.exp(-(((xx - yy) / SIZE + 0.18) ** 2) / 0.085) * 5
     return px + band[:, :, None]
 
 
@@ -289,6 +296,63 @@ def circular_alpha() -> Image.Image:
     mask = Image.new("L", (BIG, BIG), 0)
     ImageDraw.Draw(mask).ellipse([0, 0, BIG - 1, BIG - 1], fill=255)
     return mask.resize((SIZE, SIZE), Image.LANCZOS)
+
+
+# ─────────────────────────── 环境贴图 ───────────────────────────
+
+def make_environment():
+    """
+    画一张"虚拟摄影棚"。
+
+    真金属之所以好看，是因为它**映出周围的环境**——灯箱、墙面、反光板。
+    我们的场景除了黑背景什么都没有，金属就显得死板发灰。
+    这张图就是给硬币造一个可以反射的世界。
+
+    它是一张"全景展开图"：横向一圈是四周 360 度，纵向从头顶到脚下。
+    手机会把它卷成一个球罩在场景外面，硬币表面映出的就是它。
+
+    棚里布了：头顶一块大灯箱、左右两块侧灯箱、斜前方一块主灯箱，
+    还有一圈很暗的地面。灯箱边缘都是柔的，这样映在硬币上才是柔和的光带，
+    而不是一个个硬邦邦的亮点。
+    """
+    W, H = 1024, 512
+
+    # 底色不是全黑，而是中等偏暗的灰。
+    # 实测参考图里最暗处也有 90 左右，不是死黑——金属背光面映的是棚里的墙，
+    # 不是虚空。底色压太黑，硬币会一半没在黑里。
+    img = Image.new("L", (W, H), 96)
+    d = ImageDraw.Draw(img)
+
+    def box(az, el, w_deg, h_deg, value):
+        x = (az % 360) / 360 * W
+        y = (90 - el) / 180 * H
+        hw, hh = w_deg / 360 * W / 2, h_deg / 180 * H / 2
+        for shift in (-W, 0, W):
+            d.ellipse([x + shift - hw, y - hh, x + shift + hw, y + hh], fill=value)
+
+    # 一块占掉大半个天空的主灯箱。
+    # 实测参考图有 37% 的像素落在最亮那一档，说明光源面积很大，
+    # 不是几个小灯泡——所以这里铺得很开。
+    box(-30, 58, 230, 132, 255)
+    box(0, 90, 360, 72, 255)          # 头顶接上，连成一整片
+    box(-110, 16, 96, 64, 250)        # 左侧灯箱
+
+    # 两块暗区，用来在币面上压出深色的带子。
+    # 没有暗区就全是亮的，看着就"平"。
+    box(78, 30, 86, 70, 40)
+    box(150, -8, 100, 60, 46)
+
+    # 地面：暗，但留一点
+    box(0, -90, 360, 66, 52)
+
+    # 只稍微糊一下。糊过头，亮暗之间会填满中间调，
+    # 币面就从"黑白分明"变成"一片灰"——这正是上一版发灰的原因。
+    img = img.filter(ImageFilter.GaussianBlur(9))
+
+    rgb = Image.merge("RGB", (img, img, img.point(lambda v: min(255, int(v * 1.04)))))
+    path = OUT / "studio_env.png"
+    rgb.save(path, "PNG", optimize=True)
+    print(f"  {path.name}  {W}x{H}  {path.stat().st_size // 1024} KB")
 
 
 # ─────────────────────────── 音效 ───────────────────────────
@@ -387,6 +451,8 @@ if __name__ == "__main__":
             path = OUT / f"{name}{suffix}.png"
             img.save(path, "PNG", optimize=True)
             print(f"  {path.name}  {img.size[0]}x{img.size[1]}  {path.stat().st_size // 1024} KB")
+    print("生成环境贴图：")
+    make_environment()
     print("生成音效：")
     make_sounds()
     print("完成。")

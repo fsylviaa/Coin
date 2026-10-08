@@ -30,6 +30,7 @@ final class ResourcesTests: XCTestCase {
             (style.textureMoon, "png"),
             (style.textureSun + "_normal", "png"),
             (style.textureMoon + "_normal", "png"),
+            ("studio_env", "png"),
             (style.tossSound, "wav"),
             (style.landSound, "wav"),
         ]
