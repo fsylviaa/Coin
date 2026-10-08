@@ -1,7 +1,10 @@
-// App 入口。对应任务 T14、T15。
+// App 入口。对应任务 T14、T15、T16。
 //
-// 画面听"大脑"（CoinController）的：启动时读取上次结果，硬币就显示那一面。
-// 手势由盖在 3D 画面之上的透明板接收。
+// 一次完整的抛掷是这样走通的：
+//   手指上划 → 透明板接到触摸 → 判断是不是有效上划
+//     → 问大脑要一张时间表（大脑同时决定结果并存档）
+//     → 把时间表交给 3D 画面，画面每帧照着演
+//     → 演完通知大脑，状态切回静置
 //
 // 开发版底部有一行小字显示状态，正式版（Release）没有，
 // 符合需求"界面无文字"的要求。
@@ -22,34 +25,33 @@ struct RootView: View {
     /// 大脑。画面只问它"现在该显示哪一面"，不自己做决定。
     @State private var controller = CoinController()
 
+    /// 这一次抛掷是什么时候脱手的。配合时间表算出每一帧该摆成什么样。
+    @State private var flipStartedAt: Date?
+
     /// 最近一次有效上划的速度，显示在调试信息条上
     @State private var lastSpeed: Double = 0
-
-    #if DEBUG
-    /// 一共收到过几次拖动（不管算不算上划）。
-    /// 它和"速度"配合着看，能分清问题出在哪：
-    ///   手势数一直是 0  → 触摸根本没传到手势层
-    ///   手势数在涨但速度不动 → 收到了，但没过上划的门槛
-    @State private var dragCount = 0
-    #endif
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            CoinSceneView(face: controller.phase.currentFace)
+            CoinSceneView(
+                phase: controller.phase,
+                startedAt: flipStartedAt,
+                onFinished: { controller.finishFlip() }
+            )
 
             // 透明手势板，盖在 3D 画面之上
             SwipeCatcher { translation, velocity in
-                #if DEBUG
-                dragCount += 1
-                #endif
-                if case .swipeUp(let speed) = SwipeDetector.evaluate(
+                guard case .swipeUp(let speed) = SwipeDetector.evaluate(
                     translation: translation, velocity: velocity
-                ) {
-                    // T15 先只显示速度，确认手势识别准不准。
-                    // T16 会在这里真正调用 controller.requestFlip(speed:)。
-                    lastSpeed = speed
+                ) else { return }
+
+                lastSpeed = speed
+
+                // 大脑说了算：抛掷中它会返回空，这一划就被忽略
+                if controller.requestFlip(speed: speed) != nil {
+                    flipStartedAt = Date()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -58,7 +60,7 @@ struct RootView: View {
             #if DEBUG
             VStack {
                 Spacer()
-                DebugBar(phase: controller.phase, speed: lastSpeed, dragCount: dragCount)
+                DebugBar(phase: controller.phase, speed: lastSpeed)
             }
             .allowsHitTesting(false)        // 信息条不抢手势
             #endif
@@ -76,10 +78,9 @@ private struct DebugBar: View {
 
     let phase: CoinPhase
     let speed: Double
-    let dragCount: Int
 
     var body: some View {
-        Text("状态：\(phaseText) ｜ 结果：\(resultText) ｜ 速度：\(Int(speed)) ｜ 手势：\(dragCount)")
+        Text("状态：\(phaseText) ｜ 结果：\(resultText) ｜ 速度：\(Int(speed))")
             .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(.gray)
             .padding(.bottom, 10)

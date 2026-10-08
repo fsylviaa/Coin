@@ -21,8 +21,10 @@ struct StyleProfile {
     /// 落地音效的文件名（不带扩展名）
     let landSound: String
 
-    /// 弹性：落地后弹起的高度，占抛起高度的比例。
-    /// 0.2 表示抛多高就弹起两成。必须大于 0 小于 1，否则会越弹越高。
+    /// 弹性：落地后那一下小跳有多高，占抛起高度的比例。
+    /// 真硬币落在硬平面上几乎不弹，所以这个数很小——
+    /// 落地后的声音主要来自躺平前的边缘磕碰，不是弹跳。
+    /// 必须大于 0 小于 1，否则会越弹越高。
     let bounciness: Double
 
     /// 抛起高度的下限（单位：米）。轻轻一划也至少抛这么高。
@@ -41,7 +43,7 @@ extension StyleProfile {
         textureSun: "sun_silver",
         textureMoon: "moon_silver",
         landSound: "land_silver",
-        bounciness: 0.20,
+        bounciness: 0.055,
         minHeight: 0.12,
         maxHeight: 0.65
     )

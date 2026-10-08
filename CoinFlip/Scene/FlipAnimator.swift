@@ -1,0 +1,152 @@
+// 动画计算：某一刻，硬币应该在多高、怎么摆。对应任务 T16、T17。
+//
+// 它只做数学，不碰画面——所以可以用自动测试验收，不用靠眼睛看。
+// 画面每一帧问它"现在第 t 秒，硬币该摆成什么样"，它就回答。
+//
+// 整个过程照着真硬币落在桌面上的样子来：
+//     抛起 → 快速翻滚 → 边缘先着地（还歪着）
+//     → 在平面上一边打转一边摇摆，幅度越来越小、转得越来越快
+//     → 啪地躺平，停住
+//
+// 这就是真硬币快停下来时那阵"嗡嗡"的打转，物理上叫进动。
+// 我们不算真实物理，只是照着它的样子编出来——结果早就定好了，这里只负责演得像。
+//
+// ⚠️ 这里的所有时间点都来自 FlipPlan（演出时间表），
+//    绝不在这里另外写死秒数（技术文档第 3 号坑）。
+
+import Foundation
+
+enum FlipAnimator {
+
+    /// 某一刻硬币的姿态
+    struct Pose: Equatable {
+        /// 离平面多高（场景单位，0 就是贴在平面上）
+        let height: Double
+        /// 绕横轴累计翻转了多少度。奇数个 180° 就是换了一面。
+        let degrees: Double
+        /// 绕竖直轴转了多少度——落地后在平面上打转的方位。
+        /// 它不改变朝上的是哪一面，只是让摇摆的方向绕着走。
+        let wobbleDegrees: Double
+        /// 这一刻是不是已经彻底停稳了
+        let isFinished: Bool
+    }
+
+    /// 算出第 t 秒时硬币的姿态。
+    ///
+    /// - Parameters:
+    ///   - t: 从脱手算起过了多少秒
+    ///   - plan: 这一次抛掷的时间表
+    ///   - heightScale: 把时间表里的高度（米）换算成场景里的高度
+    static func pose(at t: Double, plan: FlipPlan, heightScale: Double) -> Pose {
+        let total = Double(plan.halfTurns) * 180
+
+        if t >= plan.endTime {
+            return Pose(height: 0, degrees: total,
+                        wobbleDegrees: FlipPlanner.wobbleTurns * 360, isFinished: true)
+        }
+
+        return Pose(height: height(at: t, plan: plan) * heightScale,
+                    degrees: degrees(at: t, plan: plan),
+                    wobbleDegrees: wobble(at: t, plan: plan),
+                    isFinished: false)
+    }
+
+    // MARK: - 高度
+
+    /// 第 t 秒离平面多高（米）
+    private static func height(at t: Double, plan: FlipPlan) -> Double {
+        // 第一段：抛起到落地，走一条抛物线
+        if t < plan.landTime {
+            let progress = plan.landTime > 0 ? t / plan.landTime : 1
+            return arc(progress: progress, peak: plan.height)
+        }
+
+        // 第二段：落地之后一下一下地弹，每一下都比上一下低。
+        // 弹完之后硬币就贴在平面上了，但还会继续摇摆一阵。
+        var remaining = t - plan.landTime
+        for bounce in plan.bounces {
+            if remaining < bounce.duration {
+                let progress = bounce.duration > 0 ? remaining / bounce.duration : 1
+                return arc(progress: progress, peak: bounce.height)
+            }
+            remaining -= bounce.duration
+        }
+        return 0
+    }
+
+    /// 一条抛物线：从 0 升到最高点，再落回 0。
+    private static func arc(progress: Double, peak: Double) -> Double {
+        let p = min(max(progress, 0), 1)
+        return peak * 4 * p * (1 - p)
+    }
+
+    // MARK: - 翻转
+
+    /// 第 t 秒绕横轴一共转过了多少度。
+    ///
+    /// 上抛和下落是两段不同的节奏：
+    ///   • 上升到最高点：匀速稳稳地转，有分量
+    ///   • 从最高点落下：一路减速，到贴近平面时几乎只是缓缓转动
+    ///
+    /// 两段在最高点处转速是接续上的，不会有突然变速的突兀感。
+    /// 想让上抛更活泼就加圈数，想让下落更从容就加减速程度，互不干扰。
+    ///
+    /// 另外故意少转一点点：落地那一刻硬币还歪着 26 度，
+    /// 因为真硬币是边缘先着地的。剩下这 26 度在摇摆中慢慢收完。
+    private static func degrees(at t: Double, plan: FlipPlan) -> Double {
+        let total = Double(plan.halfTurns) * 180
+        let tilt = min(FlipPlanner.landingTilt, total)
+
+        if t <= plan.landTime {
+            let progress = plan.landTime > 0 ? t / plan.landTime : 1
+            return (total - tilt) * spinProgress(progress)
+        }
+
+        let p = settleProgress(at: t, plan: plan)
+        // 越接近躺平收得越慢
+        return total - tilt * pow(1 - p, 1.6)
+    }
+
+    /// 飞行走到 progress（0 到 1）时，已经转完了全部的百分之多少。
+    ///
+    /// 前半程（上升）匀速，后半程（下落）按一条减速曲线收住。
+    /// 两段的"转量"加起来归一化成 1，所以无论减速程度怎么调，
+    /// 落地时转过的总度数都不变——结果的正确性不受影响。
+    private static func spinProgress(_ progress: Double) -> Double {
+        let d = max(FlipPlanner.descentSlowdown, 0)
+        let ascent = 0.5                     // 上升段的转量
+        let descent = 0.5 / (d + 1)          // 下落段的转量
+        let whole = ascent + descent
+
+        if progress <= 0.5 {
+            return progress / whole
+        }
+        let y = (progress - 0.5) / 0.5
+        return (ascent + 0.5 * (1 - pow(1 - y, d + 1)) / (d + 1)) / whole
+    }
+
+    // MARK: - 摇摆打转
+
+    /// 第 t 秒绕竖直轴转了多少度。
+    ///
+    /// 落地之后才开始：先慢慢转起来，中途最快，再缓缓收住。
+    ///
+    /// 真硬币快停住时那阵打转其实是越来越快的，但照搬过来在屏幕上
+    /// 会糊成一团，而且最后戛然而止很突兀。所以改成两头慢中间快，
+    /// 转速最高不过每秒两圈，看得清是硬币在晃，收尾也自然。
+    ///
+    /// 它只是让歪斜的方向绕着圈走，不影响朝上的是哪一面。
+    private static func wobble(at t: Double, plan: FlipPlan) -> Double {
+        guard t > plan.landTime else { return 0 }
+        let p = settleProgress(at: t, plan: plan)
+        let eased = 3 * p * p - 2 * p * p * p      // 缓入缓出
+        return FlipPlanner.wobbleTurns * 360 * eased
+    }
+
+    /// 落地之后到停稳之间走了多少（0 到 1）
+    private static func settleProgress(at t: Double, plan: FlipPlan) -> Double {
+        let settle = plan.endTime - plan.landTime
+        guard settle > 0 else { return 1 }
+        return min(max((t - plan.landTime) / settle, 0), 1)
+    }
+}

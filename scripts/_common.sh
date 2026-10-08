@@ -41,7 +41,8 @@ open_simulator_app() {
   fi
   # 办法三：在 Xcode 内部搜一遍
   local found
-  found=$(find "$(xcode-select -p)" -maxdepth 6 -name "Simulator.app" -type d 2>/dev/null | head -1)
+  found=$(find "$(xcode-select -p)" /Applications/Xcode.app /Library/Developer \
+            -maxdepth 8 -name "Simulator.app" -type d 2>/dev/null | head -1)
   if [ -n "$found" ] && open "$found" 2>/dev/null; then
     return 0
   fi

@@ -5,7 +5,7 @@ check_xcode
 check_project
 find_simulator
 
-echo "==> 在模拟器「$SIM_NAME」上运行测试（第一次会比较慢，请耐心等 1–3 分钟）..."
+echo "==> 在模拟器 $SIM_NAME 上运行测试（第一次会比较慢，请耐心等 1–3 分钟）..."
 if xcodebuild test \
     -project CoinFlip.xcodeproj \
     -scheme CoinFlip \

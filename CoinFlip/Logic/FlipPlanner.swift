@@ -22,10 +22,34 @@ enum FlipPlanner {
     static let maxSpeed: Double = 3000
 
     /// 最轻一划时翻几个半圈
-    static let minHalfTurns: Int = 3
+    static let minHalfTurns: Int = 2
 
-    /// 最用力一划时翻几个半圈
-    static let maxHalfTurns: Int = 11
+    /// 最用力一划时翻几个半圈。
+    /// 不宜太多——转得慢才有分量，转成陀螺就只剩炫技了。
+    static let maxHalfTurns: Int = 7
+
+    /// 小跳之后，边缘磕碰平面多少次。
+    /// 这才是"硬币躺平前那阵嗒嗒嗒"的主体。
+    static let rattleTaps: Int = 9
+
+    /// 磕碰间隔收紧的程度。小于 1 就是越来越密，越小收得越急。
+    static let rattleAccel: Double = 0.55
+
+    /// 下落时的减速程度。只影响最高点之后那一段，不影响上抛。
+    /// 0 是全程匀速；数字越大，落下时收得越慢越从容。
+    static let descentSlowdown: Double = 3.0
+
+    /// 落地那一刻硬币还歪着多少度。
+    /// 真硬币是边缘先着地的，不会平平地拍下去。这个角度在摇摆中慢慢收到 0。
+    static let landingTilt: Double = 26
+
+    /// 落地后摇摆时，硬币在平面上打几圈转。
+    /// 不宜多——转太快就糊成一团，反而看不出是硬币在晃。
+    static let wobbleTurns: Double = 1.2
+
+    /// 摇摆至少要持续这么久（秒），哪怕弹跳早就结束了。
+    /// 太短就没有"晃几下才躺稳"的感觉。
+    static let minSettleSeconds: Double = 0.85
 
     // MARK: - 决定结果（T07）
 
@@ -92,16 +116,36 @@ enum FlipPlanner {
         // 4. 按抛物线算出飞行时间：抛上去再落回来
         let landTime = flightDuration(height: height)
 
-        // 5. 落地后弹一下，弹起的高度由风格的弹性决定
-        let bounceHeight = height * style.bounciness
-        let endTime = landTime + flightDuration(height: bounceHeight)
+        // 5. 落地之后：先一下小跳，再是一连串越来越密的边缘磕碰。
+        //    真硬币落在硬平面上几乎不弹，声音主要来自躺平前的那阵磕碰。
+        let hopHeight = height * style.bounciness
+        let hop = FlipPlan.Bounce(height: hopHeight,
+                                  duration: flightDuration(height: hopHeight))
+        let settle = max(hop.duration * 1.6, minSettleSeconds)
+        let endTime = landTime + settle
+
+        let hopStrength = (hopHeight / height).squareRoot()
+        var contacts = [FlipPlan.Contact(time: landTime, strength: 1)]
+        contacts.append(.init(time: landTime + hop.duration, strength: hopStrength))
+
+        // 磕碰从小跳落回之后开始，一路密到停稳
+        let tapStart = landTime + hop.duration
+        let tapSpan = endTime - tapStart
+        for k in 1...rattleTaps {
+            let p = pow(Double(k) / Double(rattleTaps), rattleAccel)
+            let fade = 1 - Double(k - 1) / Double(rattleTaps)
+            // 磕碰一定比前面那下小跳更轻，整串才是一路衰下去的
+            contacts.append(.init(time: tapStart + tapSpan * p,
+                                  strength: hopStrength * 0.8 * pow(fade, 2.0)))
+        }
 
         return FlipPlan(result: result,
                         startFace: startFace,
                         height: height,
                         halfTurns: halfTurns,
                         landTime: landTime,
-                        bounceHeight: bounceHeight,
+                        bounces: [hop],
+                        contacts: contacts,
                         endTime: endTime)
     }
 
