@@ -23,7 +23,7 @@ xcrun simctl bootstatus "$SIM_ID" -b >/dev/null 2>&1 || true
 
 echo "==> [3/3] 安装并打开 App"
 xcrun simctl install "$SIM_ID" "$APP_PATH"
-xcrun simctl launch "$SIM_ID" com.coinflip.app.dev >/dev/null
+xcrun simctl launch "$SIM_ID" com.antheafsy.coinflip >/dev/null
 
 echo ""
 echo "✅ App 已在模拟器中打开。若没看到模拟器窗口，请点一下程序坞里的「Simulator」。"
