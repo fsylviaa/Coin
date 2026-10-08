@@ -18,7 +18,10 @@ struct StyleProfile {
     /// 月面贴图的文件名（不带扩展名）
     let textureMoon: String
 
-    /// 落地音效的文件名（不带扩展名）
+    /// 抛起时那一声的文件名（不带扩展名）。余韵较长，一直响到硬币升上去。
+    let tossSound: String
+
+    /// 落地与磕碰的音效文件名（不带扩展名）
     let landSound: String
 
     /// 弹性：落地后那一下小跳有多高，占抛起高度的比例。
@@ -42,6 +45,7 @@ extension StyleProfile {
         id: "silver",
         textureSun: "sun_silver",
         textureMoon: "moon_silver",
+        tossSound: "toss_silver",
         landSound: "land_silver",
         bounciness: 0.055,
         minHeight: 0.12,

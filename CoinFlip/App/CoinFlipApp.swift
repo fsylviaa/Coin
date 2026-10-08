@@ -31,6 +31,9 @@ struct RootView: View {
     /// 最近一次有效上划的速度，显示在调试信息条上
     @State private var lastSpeed: Double = 0
 
+    /// 声音与震动
+    @State private var feedback = FeedbackPlayer()
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -50,8 +53,12 @@ struct RootView: View {
                 lastSpeed = speed
 
                 // 大脑说了算：抛掷中它会返回空，这一划就被忽略
-                if controller.requestFlip(speed: speed) != nil {
-                    flipStartedAt = Date()
+                if let plan = controller.requestFlip(speed: speed) {
+                    let now = Date()
+                    flipStartedAt = now
+                    feedback.warmUp()
+                    // 把这一次所有的磕碰排进队列，画面和声音照的是同一张表
+                    feedback.schedule(plan, startedAt: now)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

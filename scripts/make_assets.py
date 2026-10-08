@@ -1,15 +1,18 @@
 """
-生成最小可用版的占位素材（任务 T06）。
+生成硬币素材（任务 T06）。
 
 产出三个文件到 CoinFlip/Resources/：
     sun_silver.png   日面贴图
     moon_silver.png  月面贴图
     land_silver.wav  落地撞击音效
 
-全部由代码生成，原创图案，不涉及任何真实货币或他人作品。
-以后要换精致素材时，直接替换这三个文件即可，文件名不要改。
+全部由代码生成，原创图案，不涉及任何真实货币。
+以后要换素材时，直接替换这三个文件即可，文件名不要改。
 
 重新生成：python3 scripts/make_assets.py
+
+── 版面结构（从外到内）──
+    凸起外缘 → 珠圈 → 拉丁文环 → 珠圈 → 同心细纹底 → 中央图案
 """
 
 import math
@@ -18,200 +21,339 @@ import wave
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-SIZE = 1024                      # 贴图边长（像素）
+SIZE = 1024                 # 成品贴图边长
+SS = 2                      # 先按 2 倍画再缩小，边缘才不会有锯齿
+BIG = SIZE * SS
 OUT = Path(__file__).resolve().parent.parent / "CoinFlip" / "Resources"
 
-# 银币配色：偏冷的灰白，模拟抛光银面
-SILVER_LIGHT = (232, 234, 238)
-SILVER_MID = (198, 202, 209)
-SILVER_DARK = (150, 155, 164)
-SILVER_SHADOW = (118, 123, 132)
+FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSerifCondensed-Bold.ttf"
+
+# 各圈的半径，用占半径的比例表示
+R_RIM_OUT = 0.995           # 外缘最外沿
+R_RIM_IN = 0.900            # 外缘内沿
+R_BEAD_OUTER = 0.868        # 外侧珠圈
+R_TEXT = 0.800              # 文字环中心线
+R_BEAD_INNER = 0.726        # 内侧珠圈
+R_FIELD = 0.706             # 同心细纹底的外沿
+
+SUN_TEXT = "SOL · INVICTUS · LUX · AETERNA · MMXXVI"
+MOON_TEXT = "LUNA · REGINA · SILENTII · NOCTIS · MMXXVI"
 
 
-def silver_base() -> Image.Image:
-    """画一个带斜向渐变的银色圆盘，左上偏亮、右下偏暗，看起来有金属光泽。"""
-    img = Image.new("RGB", (SIZE, SIZE), SILVER_MID)
-    px = np.array(img, dtype=np.float32)
+# ─────────────────────────── 画高度图的小工具 ───────────────────────────
+# 先把图案画成一张"高度图"（高的地方是凸起的浮雕），
+# 之后再假设一盏灯照上去，按坡度算明暗。这样出来的立体感最接近真实压铸。
 
-    yy, xx = np.mgrid[0:SIZE, 0:SIZE]
-    # 沿左上到右下的方向做渐变
-    t = ((xx + yy) / (2 * SIZE)).astype(np.float32)
-    light = np.array(SILVER_LIGHT, dtype=np.float32)
-    dark = np.array(SILVER_DARK, dtype=np.float32)
-    px = light[None, None, :] * (1 - t)[:, :, None] + dark[None, None, :] * t[:, :, None]
+def new_layer() -> Image.Image:
+    return Image.new("L", (BIG, BIG), 0)
 
-    img = Image.fromarray(px.astype(np.uint8))
 
-    d = ImageDraw.Draw(img)
-    c, r = SIZE / 2, SIZE / 2
+def polar(r: float, a: float) -> tuple[float, float]:
+    """极坐标转画布坐标。r 是占半径的比例，a 是弧度。"""
+    c = BIG / 2
+    return c + c * r * math.cos(a), c + c * r * math.sin(a)
 
-    # 外圈：一圈细齿边，模仿真实硬币的滚花
-    teeth = 120
-    for i in range(teeth):
-        a0 = 2 * math.pi * i / teeth
-        a1 = a0 + math.pi / teeth
-        shade = SILVER_SHADOW if i % 2 == 0 else SILVER_LIGHT
-        d.arc([2, 2, SIZE - 3, SIZE - 3],
-              math.degrees(a0), math.degrees(a1), fill=shade, width=26)
 
-    # 内圈：一道凹进去的环线，把图案框住
-    inset = SIZE * 0.118
-    d.ellipse([inset, inset, SIZE - inset, SIZE - inset],
-              outline=SILVER_SHADOW, width=5)
-    d.ellipse([inset + 6, inset + 6, SIZE - inset - 6, SIZE - inset - 6],
-              outline=SILVER_LIGHT, width=3)
+def ring(d: ImageDraw.ImageDraw, r_in: float, r_out: float, v: int):
+    """画一个圆环"""
+    c = BIG / 2
+    d.ellipse([c - c * r_out, c - c * r_out, c + c * r_out, c + c * r_out], fill=v)
+    d.ellipse([c - c * r_in, c - c * r_in, c + c * r_in, c + c * r_in], fill=0)
 
+
+def beads(d: ImageDraw.ImageDraw, r: float, count: int, size: float, v: int):
+    """沿一圈画一串小圆珠"""
+    for i in range(count):
+        a = 2 * math.pi * i / count
+        x, y = polar(r, a)
+        s = BIG / 2 * size
+        d.ellipse([x - s, y - s, x + s, y + s], fill=v)
+
+
+def circular_text(layer: Image.Image, text: str, r: float, height: float, v: int):
+    """
+    把文字排成一圈。每个字母都转到"头朝外"的方向，
+    这是纪念币上刻字的传统排法。
+    """
+    px = int(BIG / 2 * height)
+    font = ImageFont.truetype(FONT_PATH, px)
+
+    # 先量出每个字母多宽，好按宽度分配角度，字距才均匀
+    widths = []
+    for ch in text:
+        box = font.getbbox(ch)
+        widths.append(max(box[2] - box[0], px * 0.33))
+    spacing = px * 0.52                       # 字与字之间留的空
+    total = sum(widths) + spacing * len(text)
+    circumference = 2 * math.pi * (BIG / 2 * r)
+    scale = circumference / total             # 正好绕满一圈
+
+    angle = -math.pi / 2                      # 从正上方开始排
+    for ch, w in zip(text, widths):
+        step = (w + spacing) * scale / (BIG / 2 * r)
+        a = angle + step / 2
+
+        glyph = Image.new("L", (px * 2, px * 2), 0)
+        ImageDraw.Draw(glyph).text((px, px), ch, font=font, fill=v, anchor="mm")
+        # 转到头朝外：字母底边对着圆心
+        glyph = glyph.rotate(-math.degrees(a) + 90, resample=Image.BICUBIC)
+
+        x, y = polar(r, a)
+        layer.paste(glyph, (int(x - px), int(y - px)), glyph)
+        angle += step
+
+
+# ─────────────────────────── 两面的图案 ───────────────────────────
+
+def sun_motif(major: Image.Image, fine: Image.Image):
+    """日面：中央圆盘 + 长短交错的光芒"""
+    d = ImageDraw.Draw(major)
+    c = BIG / 2
+
+    # 长光芒和短光芒交替，长的更尖更细
+    long_rays, short_rays = 12, 12
+    for i in range(long_rays):
+        a = 2 * math.pi * i / long_rays - math.pi / 2
+        tip = polar(0.620, a)
+        base = 0.185
+        half = math.radians(4.4)
+        d.polygon([polar(base, a - half), tip, polar(base, a + half)], fill=235)
+
+    for i in range(short_rays):
+        a = 2 * math.pi * (i + 0.5) / short_rays - math.pi / 2
+        tip = polar(0.470, a)
+        base = 0.185
+        half = math.radians(3.0)
+        d.polygon([polar(base, a - half), tip, polar(base, a + half)], fill=205)
+
+    # 中央圆盘，边上围一圈小珠
+    r_core = 0.150
+    d.ellipse([c - c * r_core, c - c * r_core, c + c * r_core, c + c * r_core], fill=170)
+    beads(d, r_core, 40, 0.0125, 225)
+
+    # 圆盘内部也压上同心细纹
+    fd = ImageDraw.Draw(fine)
+    rr = 0.018
+    while rr < r_core - 0.012:
+        fd.ellipse([c - c * rr, c - c * rr, c + c * rr, c + c * rr],
+                   outline=255, width=max(2, int(BIG * 0.0012)))
+        rr += 0.0170
+
+
+def moon_motif(major: Image.Image, fine: Image.Image):
+    """月面：一弯新月 + 环形坑 + 散落的星"""
+    c = BIG / 2
+
+    # 大圆挖掉一个偏移的圆，剩下的就是月牙
+    crescent = Image.new("L", (BIG, BIG), 0)
+    cd = ImageDraw.Draw(crescent)
+    r = 0.470
+    cd.ellipse([c - c * r, c - c * r, c + c * r, c + c * r], fill=225)
+    cut_r, cx, cy = r * 0.880, c + c * r * 0.395, c - c * r * 0.120
+    cd.ellipse([cx - c * cut_r, cy - c * cut_r, cx + c * cut_r, cy + c * cut_r], fill=0)
+
+    # 月面上几处环形坑，做成凹进去的
+    hd = ImageDraw.Draw(crescent)
+    for ox, oy, orr in [(-0.250, -0.195, 0.052), (-0.330, 0.090, 0.038),
+                        (-0.175, 0.265, 0.044), (-0.085, -0.300, 0.030),
+                        (-0.300, -0.030, 0.024), (-0.130, 0.055, 0.020)]:
+        x, y = c + c * ox, c + c * oy
+        s = c * orr
+        hd.ellipse([x - s, y - s, x + s, y + s], fill=150)
+
+    major.paste(crescent, (0, 0), crescent)
+
+    # 星星：四角星，大小不一地散在月牙开口那侧
+    d = ImageDraw.Draw(major)
+    for sx, sy, ss, v in [(0.300, -0.330, 0.042, 240), (0.455, -0.090, 0.028, 225),
+                          (0.250, 0.230, 0.034, 232), (0.420, 0.330, 0.020, 215),
+                          (0.115, -0.470, 0.022, 220), (0.520, 0.120, 0.016, 205)]:
+        x, y, s = c + c * sx, c + c * sy, c * ss
+        d.polygon([(x, y - s), (x + s * 0.22, y - s * 0.22),
+                   (x + s, y), (x + s * 0.22, y + s * 0.22),
+                   (x, y + s), (x - s * 0.22, y + s * 0.22),
+                   (x - s, y), (x - s * 0.22, y - s * 0.22)], fill=v)
+
+
+# ─────────────────────────── 组装一面 ───────────────────────────
+
+def build_face(text: str, motif) -> Image.Image:
+    """画出一面的高度图，再打光成成品贴图"""
+    major = new_layer()     # 大块浮雕：外缘、珠圈、文字、图案
+    fine = new_layer()      # 细纹：底子上的同心线
+    d = ImageDraw.Draw(major)
+    c = BIG / 2
+
+    # 凸起的外缘
+    ring(d, R_RIM_IN, R_RIM_OUT, 215)
+    ring(d, R_RIM_IN, R_RIM_IN + 0.012, 120)        # 内沿一道小台阶
+
+    # 两道珠圈
+    beads(d, R_BEAD_OUTER, 132, 0.0098, 205)
+    beads(d, R_BEAD_INNER, 108, 0.0072, 190)
+
+    # 拉丁文环
+    circular_text(major, text, R_TEXT, 0.088, 225)
+
+    # 底子上的同心细纹，从中心一直铺到文字环内侧
+    fd = ImageDraw.Draw(fine)
+    rr = 0.020
+    while rr < R_FIELD:
+        fd.ellipse([c - c * rr, c - c * rr, c + c * rr, c + c * rr],
+                   outline=255, width=max(2, int(BIG * 0.0011)))
+        rr += 0.0178
+
+    # 中央主图案
+    motif(major, fine)
+
+    return light(major, fine)
+
+
+def light(major: Image.Image, fine: Image.Image) -> Image.Image:
+    """
+    给高度图打光。
+    灯在左上方：朝着灯的坡面提亮，背着灯的坡面压暗，平面不动。
+    大块浮雕和细纹分开处理——细纹要锐利，大浮雕要圆润。
+    """
+    major = major.resize((SIZE, SIZE), Image.LANCZOS)
+    fine = fine.resize((SIZE, SIZE), Image.LANCZOS)
+
+    hm = np.array(major.filter(ImageFilter.GaussianBlur(2.6)), dtype=np.float32) / 255
+    hf = np.array(fine.filter(ImageFilter.GaussianBlur(1.1)), dtype=np.float32) / 255
+
+    gy, gx = np.gradient(hm)
+    shade = np.clip((-gx - gy) * 2600, -118, 118)
+
+    fy, fx = np.gradient(hf)
+    shade += np.clip((-fx - fy) * 700, -20, 20)
+
+    px = base_silver()
+    px += shade[:, :, None]
+    # 浮雕本身略微压暗，读起来才是金属而不是发光的
+    px -= (np.array(major, dtype=np.float32) / 255)[:, :, None] * 12
+
+    img = Image.fromarray(np.clip(px, 0, 255).astype(np.uint8), "RGB").convert("RGBA")
+    img.putalpha(circular_alpha())
     return img
 
 
-def engrave(base: Image.Image, draw_motif, relief: float = 1.0) -> Image.Image:
-    """
-    把图案"刻"进银面。
+def base_silver() -> np.ndarray:
+    """抛光银的底色：左上偏亮、右下偏暗，中间还有一道柔和的高光带"""
+    yy, xx = np.mgrid[0:SIZE, 0:SIZE].astype(np.float32)
+    t = (xx + yy) / (2 * SIZE)
+    light_c = np.array([239, 241, 245], dtype=np.float32)
+    dark_c = np.array([150, 155, 165], dtype=np.float32)
+    px = light_c[None, None, :] * (1 - t)[:, :, None] + dark_c[None, None, :] * t[:, :, None]
 
-    做法接近真实的浮雕打光：先把图案画成一张"高度图"（图案处高、底面低），
-    模糊出坡度，再假设有一盏灯从左上方照过来——
-    朝向灯的坡面提亮，背对灯的坡面压暗，中间的平面不动。
-    这样细如发丝的光芒也能看出厚度，而不是糊成两个重影。
-    """
-    mask = Image.new("L", (SIZE, SIZE), 0)
-    draw_motif(ImageDraw.Draw(mask), 255)
-
-    # 模糊出坡度。半径越大，浮雕的边缘越圆润
-    height = np.array(mask.filter(ImageFilter.GaussianBlur(7)), dtype=np.float32) / 255.0
-
-    # 坡度：相邻像素的高度差
-    gy, gx = np.gradient(height)
-    # 灯从左上方来，所以左上朝向的坡面受光
-    lighting = (-gx - gy) * 1400.0 * relief
-    lighting = np.clip(lighting, -70, 70)
-
-    px = np.array(base, dtype=np.float32)
-    px += lighting[:, :, None]
-    # 图案本身略微压暗一点点，读起来是"刻进去"而不是"贴上去"
-    px -= (np.array(mask, dtype=np.float32) / 255.0)[:, :, None] * 10.0
-
-    return Image.fromarray(np.clip(px, 0, 255).astype(np.uint8))
-
-
-def sun_motif(d: ImageDraw.ImageDraw, v: int):
-    """日面：中心圆盘 + 十二道放射的锥形光芒。"""
-    c = SIZE / 2
-    core = SIZE * 0.142
-    d.ellipse([c - core, c - core, c + core, c + core], fill=v)
-
-    rays = 12
-    inner = SIZE * 0.196
-    outer = SIZE * 0.355
-    half = math.radians(6.2)          # 光芒根部的张角
-    for i in range(rays):
-        a = 2 * math.pi * i / rays - math.pi / 2
-        tip = (c + outer * math.cos(a), c + outer * math.sin(a))
-        p1 = (c + inner * math.cos(a - half), c + inner * math.sin(a - half))
-        p2 = (c + inner * math.cos(a + half), c + inner * math.sin(a + half))
-        d.polygon([p1, tip, p2], fill=v)
-
-
-def moon_motif(d: ImageDraw.ImageDraw, v: int):
-    """月面：一弯新月 + 三颗小星。"""
-    c = SIZE / 2
-    r = SIZE * 0.288
-
-    # 大圆挖掉一个偏移的圆，剩下的就是月牙
-    full = Image.new("L", (SIZE, SIZE), 0)
-    fd = ImageDraw.Draw(full)
-    fd.ellipse([c - r, c - r, c + r, c + r], fill=v)
-    cut_r = r * 0.9
-    cut_x = c + r * 0.40
-    cut_y = c - r * 0.14
-    fd.ellipse([cut_x - cut_r, cut_y - cut_r, cut_x + cut_r, cut_y + cut_r], fill=0)
-
-    # 把算好的月牙形状盖回调用方的画布上
-    d.bitmap((0, 0), full, fill=v)
-
-    # 三颗四角星，疏密有致地点在月牙开口那侧
-    for sx, sy, ss in [(0.700, 0.300, 0.030),
-                       (0.775, 0.470, 0.020),
-                       (0.655, 0.545, 0.014)]:
-        x, y, s = SIZE * sx, SIZE * sy, SIZE * ss
-        d.polygon([(x, y - s), (x + s * 0.32, y - s * 0.32),
-                   (x + s, y), (x + s * 0.32, y + s * 0.32),
-                   (x, y + s), (x - s * 0.32, y + s * 0.32),
-                   (x - s, y), (x - s * 0.32, y - s * 0.32)], fill=v)
+    # 斜向扫过的一道高光，像镜面反射
+    band = np.exp(-(((xx - yy) / SIZE + 0.18) ** 2) / 0.052) * 26
+    return px + band[:, :, None]
 
 
 def circular_alpha() -> Image.Image:
-    """
-    做一张圆形的透明遮罩：圆内不透明、圆外透明。
-    贴图是正方形的，但硬币是圆的，所以四个角要挖掉，
-    否则会看到一个方块边缘。
-    """
-    mask = Image.new("L", (SIZE * 4, SIZE * 4), 0)
-    ImageDraw.Draw(mask).ellipse([0, 0, SIZE * 4 - 1, SIZE * 4 - 1], fill=255)
-    # 先画大图再缩小，边缘才不会有锯齿
+    """圆形遮罩：圆内不透明、圆外透明，四角要挖掉"""
+    mask = Image.new("L", (BIG, BIG), 0)
+    ImageDraw.Draw(mask).ellipse([0, 0, BIG - 1, BIG - 1], fill=255)
     return mask.resize((SIZE, SIZE), Image.LANCZOS)
 
 
-def make_textures():
-    alpha = circular_alpha()
-    for name, motif in [("sun_silver", sun_motif), ("moon_silver", moon_motif)]:
-        img = engrave(silver_base(), motif).convert("RGBA")
-        img.putalpha(alpha)
-        path = OUT / f"{name}.png"
-        img.save(path, "PNG", optimize=True)
-        print(f"  {path.name}  {img.size[0]}x{img.size[1]}  {path.stat().st_size // 1024} KB")
+# ─────────────────────────── 音效 ───────────────────────────
 
-
-def make_sound():
+def metal_ring(partials, dur, fast, slow, slow_share, noise=0.0, grain=0.0, seed=11):
     """
-    合成一声金属落地的脆响。
-    原理：几个互不成整数倍的频率叠在一起（金属不像琴弦那样和谐，所以听着"当"而不是"哆"），
-    各自以不同速度衰减，前面再加一点点噪声当作撞击的瞬间。
+    合成一声金属的响。
+
+    关键在两点，都是从真实录音里量出来的：
+
+    ① 几乎全是高频。参考音里 88% 的能量在 4kHz 以上。
+       低频一多就"实"，听起来像敲木头或塑料，不像硬币。
+
+    ② 两段式衰减。先很快掉一半（38 毫秒），然后拖着一条长长的余韵
+       （300 毫秒才衰到十分之一）。只有快衰减就干巴巴，只有慢衰减就发闷。
+
+    另外频率是成簇的（比如 5310/5410/5510 挤在一起），
+    它们互相干涉会产生细微的颤动，这就是金属特有的那种"嗡"的质感。
     """
     rate = 44_100
-    dur = 0.42
     t = np.linspace(0, dur, int(rate * dur), endpoint=False)
+    env = (1 - slow_share) * np.exp(-fast * t) + slow_share * np.exp(-slow * t)
 
-    # 频率、响度、衰减快慢
-    partials = [
-        (1_850, 1.00, 11.0),
-        (2_790, 0.62, 13.5),
-        (4_120, 0.40, 17.0),
-        (5_630, 0.24, 21.0),
-        (7_410, 0.13, 27.0),
-        (  930, 0.30,  9.0),
-    ]
-    wave_data = np.zeros_like(t)
-    for freq, amp, decay in partials:
-        wave_data += amp * np.sin(2 * np.pi * freq * t) * np.exp(-decay * t)
+    w = np.zeros_like(t)
+    for freq, amp in partials:
+        # 每个分音的余韵长短略有不同，听起来才不呆板
+        jitter = 1 + 0.25 * ((freq % 7) / 7 - 0.5)
+        w += amp * np.sin(2 * np.pi * freq * t) * env ** jitter
 
-    # 撞击瞬间的那一下"噗"
-    rng = np.random.default_rng(7)
-    click = rng.normal(0, 1, t.shape) * np.exp(-420 * t) * 0.55
-    wave_data += click
+    rng = np.random.default_rng(seed)
 
-    # 开头 2 毫秒淡入，避免爆音
-    fade = np.clip(t / 0.002, 0, 1)
-    wave_data *= fade
+    # 撞击瞬间那一下极短的噪声，给声音一个"尖"的起头
+    if noise > 0:
+        w += rng.normal(0, 1, t.shape) * np.exp(-1500 * t) * noise
 
-    wave_data /= np.max(np.abs(wave_data))
-    wave_data *= 0.82
-    pcm = (wave_data * 32767).astype(np.int16)
+    # 颗粒感：跟着余韵一起慢慢消失的高频沙沙声。
+    # 真金属的响声不是纯净的正弦，表面的不规则会带出这层细碎的毛刺，
+    # 少了它就显得太"电子"。先做个简单的高通，把低频隆隆去掉。
+    if grain > 0:
+        nz = rng.normal(0, 1, t.shape)
+        nz = np.diff(nz, prepend=nz[0])
+        w += nz * env * grain
 
-    path = OUT / "land_silver.wav"
+    w *= np.clip(t / 0.0008, 0, 1)            # 开头淡入，避免爆音
+    w *= np.clip((dur - t) / 0.02, 0, 1)      # 结尾淡出，避免断得生硬
+    return w / np.max(np.abs(w))
+
+
+def write_wav(name, w, gain=0.85):
+    pcm = (w * gain * 32767).astype(np.int16)
+    path = OUT / f"{name}.wav"
     with wave.open(str(path), "wb") as f:
         f.setnchannels(1)
         f.setsampwidth(2)
-        f.setframerate(rate)
+        f.setframerate(44_100)
         f.writeframes(b"".join(struct.pack("<h", s) for s in pcm))
-    print(f"  {path.name}  {dur:.2f} 秒  {path.stat().st_size // 1024} KB")
+    print(f"  {path.name}  {len(w) / 44_100:.2f} 秒  {path.stat().st_size // 1024} KB")
+
+
+def make_sounds():
+    # 抛起：手指弹开硬币的那一声。
+    # 要亮、要长——硬币升到最高点时它还在响，这是"仪式"的起手式。
+    toss = metal_ring(
+        partials=[
+            (5_246, 1.00), (5_340, 0.88), (5_443, 0.76), (5_556, 0.68),
+            (5_693, 0.56), (6_880, 0.52), (7_640, 0.40), (9_320, 0.40),
+            (11_400, 0.28), (13_700, 0.20), (16_200, 0.12),
+            (4_750, 0.34),
+            (2_180, 0.05),                              # 中频只留一丝，多了就闷
+        ],
+        dur=1.7, fast=22, slow=2.3, slow_share=0.46, noise=0.06, grain=0.17,
+    )
+    write_wav("toss_silver", toss, gain=0.60)
+
+    # 落地：比抛起短，但也要带得住余韵，不能是"啪"的一下死响
+    land = metal_ring(
+        partials=[
+            (5_310, 0.92), (5_410, 1.00), (5_510, 0.82), (5_600, 0.70),
+            (6_290, 0.76), (6_380, 0.64), (6_900, 0.58),
+            (9_350, 0.46), (11_840, 0.34), (11_940, 0.28),
+            (13_900, 0.22), (16_500, 0.13),
+            (190, 0.05),                                  # 平面的一点回应，很轻
+        ],
+        dur=0.95, fast=36, slow=5.0, slow_share=0.30, noise=0.11, grain=0.21, seed=5,
+    )
+    write_wav("land_silver", land, gain=0.88)
 
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
     print("生成贴图：")
-    make_textures()
+    for name, text, motif in [("sun_silver", SUN_TEXT, sun_motif),
+                              ("moon_silver", MOON_TEXT, moon_motif)]:
+        img = build_face(text, motif)
+        path = OUT / f"{name}.png"
+        img.save(path, "PNG", optimize=True)
+        print(f"  {path.name}  {img.size[0]}x{img.size[1]}  {path.stat().st_size // 1024} KB")
     print("生成音效：")
-    make_sound()
+    make_sounds()
     print("完成。")

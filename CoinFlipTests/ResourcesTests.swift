@@ -28,6 +28,7 @@ final class ResourcesTests: XCTestCase {
         let items: [(String, String)] = [
             (style.textureSun, "png"),
             (style.textureMoon, "png"),
+            (style.tossSound, "wav"),
             (style.landSound, "wav"),
         ]
 
