@@ -7,7 +7,7 @@
 // ⚠️ 任何地方都不要另外写死秒数（比如"0.9 秒后播放撞击声"），
 //    一律从这张表里取，否则改了高度，声音就会对不上画面。
 
-struct FlipPlan {
+struct FlipPlan: Equatable {
 
     /// 预先决定好的结果。动画只是把它演出来，不会改变它。
     let result: CoinFace
