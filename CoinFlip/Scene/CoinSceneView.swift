@@ -68,6 +68,24 @@ enum CoinScene {
     /// 松手但没甩出去时，落回平面要多久
     static let dragReturnSeconds: Double = 0.22
 
+    // 首次上划引导。
+    //
+    // 界面上没有按钮也没有文字，新用户是不知道要上划的。
+    // 所以让硬币自己被轻轻提起又落回——不解释、不写字，手会懂。
+    // 用的就是跟手拖拽那套抬升，所以引导演示的动作和真正要做的动作一模一样。
+    //
+    // ★ 它不会自己停。★ 一直邀请到用户真的成功抛出第一次为止——
+    //   没学会之前就把提示收走，等于没提示。学会之后就永远不再出现。
+    /// 先静静待一会儿，让人看清这是一枚静止的硬币，再开始提示
+    static let hintDelay: Double = 1.0
+    /// 提到"手指能提到的最高处"的多少。小一点，是邀请不是演示
+    static let hintRise: Float = 0.36
+    static let hintUpSeconds: Double = 0.34       // 提起：快起慢停
+    static let hintDownSeconds: Double = 0.54     // 落回：慢一些，有重量
+    static let hintGapSeconds: Double = 0.44      // 两次之间停一下
+    /// 一次完整的"提起—落回—停顿"有多久
+    static var hintCycle: Double { hintUpSeconds + hintDownSeconds + hintGapSeconds }
+
     // 等待时的镜头微动。
     // 硬币是躺在平面上的，自己不该浮起来，所以改成镜头极缓慢地游移，
     // 画面有呼吸感，物理上也说得通。
@@ -105,6 +123,10 @@ final class CoinSceneState {
     /// 脱手那一刻硬币已经被提到多高。飞行时要从这个高度接上，不能跳。
     var launchLift: Float = 0
 
+    /// 引导是什么时候开始的。为空表示不放引导。
+    /// 手指一按下就重置，松手后重新从静止开始邀请。
+    var hintStartedAt: Date?
+
     /// 上一帧是什么时候，用来算每帧间隔
     var lastTick: Date?
     /// 等待状态是从什么时候开始的，用来算呼吸的相位
@@ -124,6 +146,9 @@ struct CoinSceneView: View {
 
     /// 动画演完时调用一次
     var onFinished: () -> Void = {}
+
+    /// 要不要放首次上划引导
+    var showsHint: Bool = false
 
     @State private var state = CoinSceneState()
 
@@ -174,6 +199,11 @@ struct CoinSceneView: View {
             state.startedAt = startedAt
             state.onFinished = onFinished
             state.dragUp = dragUp
+
+            // 引导一直放到成功抛出第一次为止。
+            // 那一刻大脑会把 showsHint 置为 false，这里就自然收掉了。
+            if showsHint, state.hintStartedAt == nil { state.hintStartedAt = Date() }
+            if !showsHint { state.hintStartedAt = nil }
         }
         .background(.black)
         .ignoresSafeArea()
@@ -186,7 +216,7 @@ struct CoinSceneView: View {
         let dt = min(now.timeIntervalSince(state.lastTick ?? now), 0.05)
         state.lastTick = now
 
-        updateLift(dt: dt)
+        updateLift(dt: dt, now: now)
         updateCamera(dt: dt, now: now)
         updateCoin(now: now)
         updateShadow()
@@ -226,15 +256,50 @@ struct CoinSceneView: View {
     /// 往上追得紧（贴手），松手落回时慢一些（有重量感）。
     /// 因为是"每帧往目标靠一点"，松手时目标自动变成 0，硬币就自己落回去了，
     /// 不需要单独写一段"回弹动画"。
-    private func updateLift(dt: Double) {
+    private func updateLift(dt: Double, now: Date) {
         if case .flipping = state.phase { return }
 
-        let target = liftTarget(for: state.dragUp)
+        var target = liftTarget(for: state.dragUp)
+
+        // 引导：没人碰的时候，硬币自己把自己提起来又放下，一遍一遍地邀请
+        if let startedAt = state.hintStartedAt {
+            if state.dragUp > 0 {
+                // 手指按下了，引导让位；松手后从头的静止开始重新邀请，
+                // 这样不会出现"人刚碰一下，硬币自己又动起来"的别扭
+                state.hintStartedAt = now
+            } else {
+                target = max(target, Self.hintLift(elapsed: now.timeIntervalSince(startedAt)))
+            }
+        }
         let seconds = target > state.lift
             ? CoinScene.dragFollowSeconds
             : CoinScene.dragReturnSeconds
         let k = Float(1 - exp(-dt / max(seconds / 3, 0.0001)))
         state.lift += (target - state.lift) * k
+    }
+
+    /// 引导进行到第 elapsed 秒时，硬币该被提起多高。
+    ///
+    /// 周而复始，不会自己停——收不收由大脑决定（成功抛出第一次就收）。
+    static func hintLift(elapsed: Double) -> Float {
+        let t = elapsed - CoinScene.hintDelay
+        guard t >= 0 else { return 0 }            // 还在开头那段静止里
+
+        let cycle = CoinScene.hintCycle
+        let p = t.truncatingRemainder(dividingBy: cycle)
+        let shape: Double
+        if p < CoinScene.hintUpSeconds {
+            // 提起：一开始快，接近顶点时收住，像被一只看不见的手拎起来
+            let x = p / CoinScene.hintUpSeconds
+            shape = 1 - pow(1 - x, 3)
+        } else if p < CoinScene.hintUpSeconds + CoinScene.hintDownSeconds {
+            // 落回：两头慢中间快，有重量
+            let x = (p - CoinScene.hintUpSeconds) / CoinScene.hintDownSeconds
+            shape = 1 - (3 * x * x - 2 * x * x * x)
+        } else {
+            shape = 0                              // 两次之间歇一下
+        }
+        return Float(shape) * CoinScene.maxDragLift * CoinScene.hintRise
     }
 
     /// 镜头：落定之后缓缓绕到上方并推近，一旦开抛就迅速退回低角度常态。

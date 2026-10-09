@@ -15,6 +15,9 @@ struct CoinStore {
     /// 存在手机里的键名。改了它，老用户的记录就读不到了，所以不要改。
     private static let key = "lastResult"
 
+    /// 首次上划引导看过了没有
+    private static let hintKey = "hasSeenSwipeHint"
+
     private let defaults: UserDefaults
 
     /// 平时用系统默认的抽屉；测试时传一个独立的抽屉进来，
@@ -35,8 +38,23 @@ struct CoinStore {
         return CoinFace(rawValue: raw)
     }
 
+    /// 上划引导放过了没有。
+    ///
+    /// 界面上没有任何按钮和文字，新用户拿到手是不知道要上划的。
+    /// 所以第一次打开时硬币会自己被轻轻提起又落回几次，不解释，手会懂。
+    /// ★ 只在第一次。★ 放过一次就永远不再出现。
+    var hasSeenHint: Bool {
+        defaults.bool(forKey: Self.hintKey)
+    }
+
+    /// 记下"引导已经放过了"。
+    func markHintSeen() {
+        defaults.set(true, forKey: Self.hintKey)
+    }
+
     /// 清空记录，回到"从没抛过"的状态。目前只在测试里用。
     func clear() {
         defaults.removeObject(forKey: Self.key)
+        defaults.removeObject(forKey: Self.hintKey)
     }
 }

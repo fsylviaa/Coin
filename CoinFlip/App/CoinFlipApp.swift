@@ -51,7 +51,8 @@ struct RootView: View {
                 phase: controller.phase,
                 startedAt: flipStartedAt,
                 dragUp: dragUp,
-                onFinished: { controller.finishFlip() }
+                onFinished: { controller.finishFlip() },
+                showsHint: controller.showsHint
             )
 
             // 透明手势板，盖在 3D 画面之上
@@ -88,13 +89,11 @@ struct RootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea()
 
-            #if DEBUG
             VStack {
                 Spacer()
-                DebugBar(phase: controller.phase, speed: lastSpeed)
+                StatusLine(phase: controller.phase, speed: lastSpeed)
             }
-            .allowsHitTesting(false)        // 信息条不抢手势
-            #endif
+            .allowsHitTesting(false)        // 这行字不抢手势
         }
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
@@ -131,35 +130,57 @@ extension RootView {
     }
 }
 
-#if DEBUG
-/// 只在开发版出现的一行小字。
-/// 它让你不用看代码，也能核对"信息条说是月，硬币显示的也是月"。
-private struct DebugBar: View {
+/// 屏幕底部那一行字。正式版里这是整个 App 唯一的文字。
+///
+/// 它既是给用户看的（硬币现在是什么状态、结果是哪一面），
+/// 也是核对用的——写着 Luna，硬币朝上的就必须是月面。
+/// 这个对照在开发时抓过错，所以这行字不只是装饰。
+///
+/// 用词跟着币面上的拉丁文走：日面刻的是 SOL INVICTUS，月面是 LUNA REGINA。
+/// 所以不说 Sun / Moon，说 Sol / Luna。
+///
+/// ⚠️ 它常驻正式版。原来 V1 需求写的是"界面无文字"，这一条已经改了，
+///    两份文档都同步过。改动这里之前先看一眼文档，别又改回去。
+private struct StatusLine: View {
 
     let phase: CoinPhase
     let speed: Double
 
     var body: some View {
-        Text("状态：\(phaseText) ｜ 结果：\(resultText) ｜ 速度：\(Int(speed))")
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundStyle(.gray)
-            .padding(.bottom, 10)
+        Text(text)
+            // 衬线体，和币面上的拉丁文是一路的；字距拉开，少量文字才站得住
+            .font(.system(size: 12, weight: .regular, design: .serif))
+            .tracking(2.6)
+            .foregroundStyle(.white.opacity(0.34))
+            .padding(.bottom, 18)
+            // 换词时淡入淡出，不要硬切——它现在是体验的一部分，不是调试输出
+            .contentTransition(.opacity)
+            .animation(.easeInOut(duration: 0.38), value: text)
+            .accessibilityLabel(spokenText)
     }
 
-    private var phaseText: String {
+    private var text: String {
+        #if DEBUG
+        // 开发版多挂一个上划速度，调手感时要看。正式版没有。
+        if case .flipping = phase { return "Coin: \(word) · \(Int(speed))" }
+        #endif
+        return "Coin: \(word)"
+    }
+
+    private var word: String {
         switch phase {
-        case .waiting:  return "等待中"
-        case .flipping: return "抛掷中"
-        case .resting:  return "静置中"
+        case .waiting:              return "Ready"
+        case .flipping:             return "Tossing"
+        case .resting(let face):    return face == .sun ? "Sol" : "Luna"
         }
     }
 
-    private var resultText: String {
+    /// 旁白读出来的版本。Sol / Luna 对看不见屏幕的人没有意义，所以说日面月面。
+    private var spokenText: String {
         switch phase {
-        case .waiting:              return "无"
-        case .flipping(let plan):   return plan.result == .sun ? "日" : "月"
-        case .resting(let face):    return face == .sun ? "日" : "月"
+        case .waiting:              return "硬币静止，上划抛出"
+        case .flipping:             return "抛掷中"
+        case .resting(let face):    return face == .sun ? "结果：日面" : "结果：月面"
         }
     }
 }
-#endif

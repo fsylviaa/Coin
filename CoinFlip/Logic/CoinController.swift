@@ -14,6 +14,9 @@ final class CoinController {
     /// 硬币当前的状态。画面根据它决定显示什么。
     private(set) var phase: CoinPhase = .waiting
 
+    /// 要不要放首次上划引导。只有装上之后从没抛过的那一次是 true。
+    private(set) var showsHint = false
+
     private let store: CoinStore
     private let style: StyleProfile
 
@@ -30,6 +33,15 @@ final class CoinController {
         } else {
             phase = .waiting
         }
+        showsHint = !store.hasSeenHint
+    }
+
+    /// 引导放完了，或者用户自己动手了——两种情况都算看过。
+    /// 记下之后就永远不再放。
+    func hintFinished() {
+        guard showsHint else { return }
+        showsHint = false
+        store.markHintSeen()
     }
 
     /// 收到一次有效上划。
@@ -41,6 +53,8 @@ final class CoinController {
     @discardableResult
     func requestFlip(speed: Double, distance: Double) -> FlipPlan? {
         guard phase.acceptsFlip else { return nil }   // 抛掷中，直接忽略，不排队也不叠加
+
+        hintFinished()                                // 会抛了，引导就不用再放了
 
         let result = FlipPlanner.decideResult()
         store.save(result)                            // 立刻存档，先于动画
