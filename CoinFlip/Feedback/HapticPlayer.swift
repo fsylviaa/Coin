@@ -44,6 +44,10 @@ enum HapticTuning {
     /// 脱手那一下的轻点提示
     static let tossIntensity: Float = 0.45
 
+    /// 自旋每转过一个刻度响一下的轻重。
+    /// 它很密，所以要很轻——靠疏密表达转速，不靠轻重。
+    static let spinTickIntensity: Float = 0.30
+
     /// 比这还轻的磕碰就不震了，免得糊成一片
     static let minStrength: Double = 0.02
 
@@ -75,6 +79,8 @@ final class HapticPlayer {
 
     private var engine: CHHapticEngine?
     private var player: CHHapticPatternPlayer?
+    /// 自旋刻度那一下。只搭一次，反复重启
+    private var tickPlayer: CHHapticPatternPlayer?
 
     /// 这台设备有没有精细震动引擎。没有就用下面这个简易的顶上。
     private let hasEngine = CHHapticEngine.capabilitiesForHardware().supportsHaptics
@@ -156,6 +162,33 @@ final class HapticPlayer {
         return true
     }
 
+    /// 自旋转过一个刻度时响一下。
+    ///
+    /// 这一下会非常频繁（转得快时每秒十几次），所以播放器**只做一次**，
+    /// 之后每次只是重新启动它——不能每次都现搭一个图案，那样主线程扛不住。
+    func spinTick() {
+        guard hasEngine else {
+            simple.impactOccurred(intensity: 0.28)
+            return
+        }
+        if tickPlayer == nil { tickPlayer = makeTickPlayer() }
+        try? tickPlayer?.start(atTime: CHHapticTimeImmediate)
+    }
+
+    /// 自旋刻度用的那一下：很轻、很脆，像硬币边缘擦过桌面
+    private func makeTickPlayer() -> CHHapticPatternPlayer? {
+        guard let engine else { return nil }
+        let event = CHHapticEvent(
+            eventType: .hapticTransient,
+            parameters: [
+                .init(parameterID: .hapticIntensity,
+                      value: HapticTuning.clamp(HapticTuning.spinTickIntensity * HapticTuning.gain)),
+                .init(parameterID: .hapticSharpness, value: 0.95)],
+            relativeTime: 0)
+        guard let pattern = try? CHHapticPattern(events: [event], parameters: []) else { return nil }
+        return try? engine.makePlayer(with: pattern)
+    }
+
     /// 没有精细震动引擎时，调用方每到一下磕碰就调一次这个。
     func simpleTap(strength: Double) {
         guard strength >= 0.12 else { return }    // 简易震动太轻了根本摸不出来
@@ -168,6 +201,7 @@ final class HapticPlayer {
     func stopAll() {
         try? player?.stop(atTime: CHHapticTimeImmediate)
         player = nil
+        tickPlayer = nil          // 引擎要停了，这个播放器也跟着作废
         engine?.stop(completionHandler: nil)
     }
 }

@@ -121,6 +121,11 @@ final class FeedbackPlayer {
         }
     }
 
+    /// 自旋转过一个刻度：手上轻响一下。没有声音，只有震动。
+    func spinTick() {
+        haptics.spinTick()
+    }
+
     /// 响一下。轻重由这次磕碰的强度决定。
     private func fire(strength: Double) {
         playSound(volume: Float(strength))

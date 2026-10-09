@@ -68,6 +68,25 @@ enum CoinScene {
     /// 松手但没甩出去时，落回平面要多久
     static let dragReturnSeconds: Double = 0.22
 
+    // 横拨自旋：停稳后横着一拨，硬币原地转几圈再缓缓停下。
+    //
+    // ★ 它永远不改变朝上的是哪一面。★ 只绕竖直轴转，结果完全不受影响，
+    //   所以整件事做在画面层就够了——状态机、存档、一致性测试一行都不用动。
+    /// 手指横向划 1 点，硬币转多少度。跟手的紧密程度
+    static let spinPerPoint: Float = 0.78
+    /// 甩出去时，手指速度（点/秒）换成角速度（度/秒）的倍数
+    static let spinSpeedScale: Float = 0.78
+    /// 角速度上限（度/秒）。再快图案就糊成一片了
+    static let spinMaxSpeed: Float = 900
+    /// 转速掉到十分之一需要多少秒。越大转得越久
+    static let spinDecaySeconds: Double = 2.1
+    /// 慢到这个角速度就算停了，免得无限趋近永远不停
+    static let spinStopSpeed: Float = 10
+    /// 每转过多少度，手上响一下轻微的震动
+    static let spinTickDegrees: Float = 60
+    /// 两次震动之间至少隔多久。转太快时宁可少震几下，也不能让震动把画面拖住
+    static let spinTickMinInterval: Double = 0.07
+
     // 首次上划引导。
     //
     // 界面上没有按钮也没有文字，新用户是不知道要上划的。
@@ -93,6 +112,22 @@ enum CoinScene {
     static let driftElevation: Float = 2.0       // 高低游移幅度（度）
     static let driftYawPeriod: Double = 13.0
     static let driftElevationPeriod: Double = 9.0
+}
+
+/// 甩出去的那一拨。
+///
+/// 时间戳是用来辨认"这是不是新的一次"的——画面每帧都会读到同一个值，
+/// 没有它就会把同一拨反复加速上去。
+struct SpinImpulse: Equatable {
+    let degreesPerSecond: Float
+    let at: Date
+
+    /// 从手指的横向速度换算。往右为正，并且封了顶，再使劲也不会糊成一片。
+    init(sideSpeed: Double, at: Date = Date()) {
+        let raw = Float(sideSpeed) * CoinScene.spinSpeedScale
+        self.degreesPerSecond = min(max(raw, -CoinScene.spinMaxSpeed), CoinScene.spinMaxSpeed)
+        self.at = at
+    }
 }
 
 /// 在每一帧之间保存状态的小盒子。
@@ -123,6 +158,27 @@ final class CoinSceneState {
     /// 脱手那一刻硬币已经被提到多高。飞行时要从这个高度接上，不能跳。
     var launchLift: Float = 0
 
+    // ── 横拨自旋 ──
+    /// 硬币静置时绕竖直轴转到了哪个角度（度）。
+    ///
+    /// ★ 它必须被"静置姿态"用上。★ 不然自旋停在某个角度后，
+    ///   下一帧摆成不带转角的静置姿态，硬币会原地弹回去——
+    ///   和当初落地那一刻突然扭 72 度是同一个坑。
+    var restYaw: Float = 0
+    /// 当前角速度（度/秒）。甩出去之后一路衰减到 0
+    var spinVelocity: Float = 0
+    /// 手指按下那一刻的转角。拖动期间以它为基准跟手
+    var yawAtTouchDown: Float = 0
+    /// 手指此刻横向拖了多少点
+    var dragSide: CGFloat = 0
+    var dragging = false
+    /// 距离上一次自旋震动，又转过了多少度
+    var yawSinceTick: Float = 0
+    var lastTickAt: Date?
+    /// 已经处理过的那一次甩动。靠时间戳辨认，避免同一次被加速两遍
+    var lastImpulseAt: Date?
+    var onSpinTick: () -> Void = {}
+
     /// 引导是什么时候开始的。为空表示不放引导。
     /// 手指一按下就重置，松手后重新从静止开始邀请。
     var hintStartedAt: Date?
@@ -146,6 +202,18 @@ struct CoinSceneView: View {
 
     /// 动画演完时调用一次
     var onFinished: () -> Void = {}
+
+    /// 手指此刻横向拖了多少点。硬币靠它实时跟手转动
+    var dragSide: CGFloat = 0
+
+    /// 手指此刻是不是按在屏幕上
+    var dragging: Bool = false
+
+    /// 刚刚甩出去的那一拨。时间戳用来辨认是不是新的一次
+    var spinImpulse: SpinImpulse?
+
+    /// 自旋每转过一个刻度调用一次，用来出震动
+    var onSpinTick: () -> Void = {}
 
     /// 要不要放首次上划引导
     var showsHint: Bool = false
@@ -192,13 +260,34 @@ struct CoinSceneView: View {
                     // 记下来，飞行曲线要从这里接上，不能从地面重新开始。
                     state.launchLift = state.lift
                     state.lift = 0
+                    // 新的一抛：转角归零，飞行中的朝向由时间表接管
+                    state.restYaw = 0
+                    state.spinVelocity = 0
+                    state.yawSinceTick = 0
                 }
                 state.phase = phase
                 state.finishReported = false
             }
             state.startedAt = startedAt
             state.onFinished = onFinished
+            state.onSpinTick = onSpinTick
             state.dragUp = dragUp
+            state.dragSide = dragSide
+
+            // 手指刚按下：记住此刻的转角，拖动期间以它为基准；并掐掉残余的自旋
+            if dragging != state.dragging {
+                state.dragging = dragging
+                if dragging {
+                    state.yawAtTouchDown = state.restYaw
+                    state.spinVelocity = 0
+                }
+            }
+
+            // 刚甩出去的一拨。同一次只能加速一遍，所以用时间戳辨认
+            if let impulse = spinImpulse, impulse.at != state.lastImpulseAt {
+                state.lastImpulseAt = impulse.at
+                state.spinVelocity = impulse.degreesPerSecond
+            }
 
             // 引导一直放到成功抛出第一次为止。
             // 那一刻大脑会把 showsHint 置为 false，这里就自然收掉了。
@@ -217,6 +306,7 @@ struct CoinSceneView: View {
         state.lastTick = now
 
         updateLift(dt: dt, now: now)
+        updateSpin(dt: dt, now: now)
         updateCamera(dt: dt, now: now)
         updateCoin(now: now)
         updateShadow()
@@ -276,6 +366,57 @@ struct CoinSceneView: View {
             : CoinScene.dragReturnSeconds
         let k = Float(1 - exp(-dt / max(seconds / 3, 0.0001)))
         state.lift += (target - state.lift) * k
+    }
+
+    /// 横拨自旋：手指拖着它转，松手后带着余速继续转，一路衰减到停。
+    ///
+    /// 整件事只改绕竖直轴的转角，**不碰朝上的是哪一面**，所以它完全待在画面层，
+    /// 不经过大脑、不进存档、不影响任何一致性测试。
+    private func updateSpin(dt: Double, now: Date) {
+        if case .flipping = state.phase {        // 抛掷中由时间表接管朝向
+            state.spinVelocity = 0
+            return
+        }
+
+        let before = state.restYaw
+
+        if state.dragging {
+            // 跟手：手指划到哪，硬币就转到哪。以按下那一刻的角度为基准
+            state.restYaw = state.yawAtTouchDown
+                + Float(state.dragSide) * CoinScene.spinPerPoint
+        } else if state.spinVelocity != 0 {
+            state.restYaw += state.spinVelocity * Float(dt)
+            state.spinVelocity = Self.decayedSpin(state.spinVelocity, dt: dt)
+        }
+
+        tickSpin(turned: abs(state.restYaw - before), now: now)
+    }
+
+    /// 角速度随时间衰减。转得越久越慢，慢到一定程度就直接停住。
+    static func decayedSpin(_ velocity: Float, dt: Double) -> Float {
+        // 衰减到十分之一要 spinDecaySeconds 秒，换算成指数衰减的时间常数
+        let tau = CoinScene.spinDecaySeconds / log(10)
+        let next = velocity * Float(exp(-dt / tau))
+        return abs(next) < CoinScene.spinStopSpeed ? 0 : next
+    }
+
+    /// 每转过一个刻度，手上响一下。
+    ///
+    /// 不调轻重、只调疏密——转得快"嗒嗒嗒"就密，慢下来就稀，
+    /// 和真硬币在桌上转的感觉一致，而且比改强度省事得多。
+    ///
+    /// 还设了一个最短间隔：转得飞快时宁可少震几下，也不能让震动把画面拖住。
+    /// 这是上一轮卡顿的教训。
+    private func tickSpin(turned: Float, now: Date) {
+        guard turned > 0 else { return }
+        state.yawSinceTick += turned
+        guard state.yawSinceTick >= CoinScene.spinTickDegrees else { return }
+        state.yawSinceTick = 0
+
+        if let last = state.lastTickAt,
+           now.timeIntervalSince(last) < CoinScene.spinTickMinInterval { return }
+        state.lastTickAt = now
+        state.onSpinTick()
     }
 
     /// 引导进行到第 elapsed 秒时，硬币该被提起多高。
@@ -412,7 +553,13 @@ struct CoinSceneView: View {
 
         let ratio = CoinScene.maxDragLift > 0 ? state.lift / CoinScene.maxDragLift : 0
         let tilt = CoinScene.dragTilt * ratio * .pi / 180
-        coin.transform.rotation = simd_quatf(angle: tilt, axis: [1, 0, 0])
+
+        // ★ 转角必须加在这里。★ 漏了的话，自旋停下的那一帧硬币会原地弹回正，
+        //   和当初落地时突然扭 72 度是同一个坑。
+        //   它绕的是竖直轴，所以只改朝向，不改朝上的是哪一面。
+        let yaw = simd_quatf(angle: state.restYaw * .pi / 180, axis: [0, 1, 0])
+        coin.transform.rotation = yaw
+            * simd_quatf(angle: tilt, axis: [1, 0, 0])
             * Self.restingRotation(for: face)
     }
 

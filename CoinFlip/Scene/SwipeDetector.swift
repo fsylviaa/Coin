@@ -1,4 +1,5 @@
-// 上划识别：判断一次手势算不算有效上划，并量出它有多快。对应任务 T15。
+// 手势识别：判断一次手势是上划（抛出）、横拨（原地自旋），还是什么都不算。
+// 对应任务 T15，横拨是后来新增的把玩动作。
 //
 // 这里只做判断和计算，不碰画面也不碰硬币，所以可以单独用自动测试验收。
 //
@@ -22,11 +23,29 @@ enum SwipeDetector {
     /// 1.0 表示方向要偏向上，斜着划 45 度以内都算上划，再歪就不算了。
     static let maxHorizontalRatio: Double = 1.3
 
+    // ── 横拨自旋的门槛 ──
+    //
+    // ★ 横拨永远不改变朝上的是哪一面。★ 它只绕竖直轴转，所以结果不受影响。
+    //   这不是"我觉得安全"：FlipAnimatorTests 里有一个测试专门守着这条性质。
+
+    /// 至少要横着划这么多点，才算一次横拨
+    static let minSideDistance: Double = 22
+
+    /// 至少要有这么快（点/秒），才算横拨。
+    /// 比上划的门槛低一些——横拨是"轻轻一拨"，本来就不该使劲。
+    static let minSideSpeed: Double = 110
+
+    /// 横拨允许的倾斜：竖直移动不能超过横向移动的这个倍数。
+    /// 比上划那边严（上划是 1.3），因为斜着划更可能是想抛，不是想拨。
+    static let maxVerticalRatio: Double = 0.8
+
     /// 一次手势的判定结果
     enum Result: Equatable {
         /// 有效上划，附带峰值速度（点/秒）和往上划的距离（点），都是正数
         case swipeUp(speed: Double, distance: Double)
-        /// 不算上划
+        /// 有效横拨，附带峰值速度（点/秒）。**往右为正，往左为负。**
+        case spin(speed: Double)
+        /// 什么都不算
         case ignored
     }
 
@@ -46,5 +65,27 @@ enum SwipeDetector {
         guard sideways <= up * maxHorizontalRatio else { return .ignored }  // 太歪，不算上划
 
         return .swipeUp(speed: upSpeed, distance: up)
+    }
+
+    /// 判断一次手势算不算横拨。
+    ///
+    /// ⚠️ 调用方必须**先问 evaluate、再问这个**。两者的允许范围有一小段重叠，
+    ///    重叠时按上划算——想抛却被判成拨，比想拨却被判成抛更让人恼火。
+    ///
+    /// - Parameters:
+    ///   - translation: 手指从按下到松开一共移动了多少
+    ///   - velocity: 横向峰值速度（往右为正）
+    static func evaluateSpin(translation: CGSize, velocity: CGSize) -> Result {
+        let sideways = Double(translation.width)
+        let distance = abs(sideways)
+        let speed = Double(velocity.width)
+        // 上下都算"歪"：往右下拨和往右上拨一样是拨
+        let vertical = abs(Double(translation.height))
+
+        guard distance >= minSideDistance else { return .ignored }          // 拨得太短
+        guard abs(speed) >= minSideSpeed else { return .ignored }           // 拨得太慢
+        guard vertical <= distance * maxVerticalRatio else { return .ignored }  // 太歪，更像在抛
+
+        return .spin(speed: speed)
     }
 }

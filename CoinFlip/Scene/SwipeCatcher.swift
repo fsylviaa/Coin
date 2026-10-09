@@ -17,15 +17,28 @@
 import SwiftUI
 import UIKit
 
+/// 一次手势结束时量到的全部信息。
+///
+/// 两个速度都取整个手势里的峰值，而不是抬手那一瞬间——理由见下面的注释。
+/// 分开量是因为上划和横拨是两件事：上划看竖直方向最快多少，横拨看水平方向。
+struct DragOutcome: Equatable {
+    /// 从按下到松开一共移动了多少（屏幕坐标：往上是负数）
+    let translation: CGSize
+    /// 整个手势里往上最快的那一下
+    let upVelocity: CGSize
+    /// 整个手势里横向最快的那一下（往右为正）
+    let sideVelocity: CGSize
+}
+
 struct SwipeCatcher: UIViewRepresentable {
 
     /// 手指移动过程中持续调用，交出"从按下到现在一共移动了多少"。
     /// 硬币靠它实时跟着手指走，所以必须每一帧都报，不能等到松手。
     var onDragChanged: (CGSize) -> Void = { _ in }
 
-    /// 手指抬起时调用，交出"一共移动了多少"和"整个手势里最快的那一下"。
-    /// 算不算有效上划由调用方交给 SwipeDetector 判断，这里不做判断。
-    var onDragEnded: (CGSize, CGSize) -> Void
+    /// 手指抬起时调用，交出这一次手势量到的全部信息。
+    /// 算不算上划、算不算横拨，由调用方交给 SwipeDetector 判断，这里不做判断。
+    var onDragEnded: (DragOutcome) -> Void
 
     func makeUIView(context: Context) -> TouchTrackingView {
         let view = TouchTrackingView()
@@ -55,7 +68,7 @@ struct SwipeCatcher: UIViewRepresentable {
 final class TouchTrackingView: UIView {
 
     var onDragChanged: ((CGSize) -> Void)?
-    var onDragEnded: ((CGSize, CGSize) -> Void)?
+    var onDragEnded: ((DragOutcome) -> Void)?
 
     /// 算一小段速度时，跨多长时间取样（秒）。
     /// 太短会被手抖放大，太长会把快慢抹平。
@@ -106,18 +119,25 @@ final class TouchTrackingView: UIView {
                                  height: endPoint.y - startPoint.y)
 
         onDragChanged?(.zero)              // 手指离开，硬币不再被牵着
-        onDragEnded?(translation, peakUpwardVelocity())
+        onDragEnded?(DragOutcome(translation: translation,
+                                 upVelocity: peakVelocity(.up),
+                                 sideVelocity: peakVelocity(.side)))
     }
 
-    /// 整个手势里"往上最快的那一下"有多快。
+    private enum Axis { case up, side }
+
+    /// 整个手势里某个方向上"最快的那一下"有多快。
     ///
-    /// 做法是沿着记录下来的轨迹滑动一个小窗口，逐段算速度，取往上最快的那一段。
+    /// 做法是沿着记录下来的轨迹滑动一个小窗口，逐段算速度，取那个方向最快的一段。
     /// 这样无论你是划到底直接松手，还是先停一下再松，量到的都是你真正用的力气。
-    private func peakUpwardVelocity() -> CGSize {
+    ///
+    /// 两个方向要分开取峰值：一次上划里横向可能在某一瞬间也很快（手抖），
+    /// 合在一起取会互相污染。
+    private func peakVelocity(_ axis: Axis) -> CGSize {
         guard samples.count >= 2 else { return .zero }
 
         var best = CGSize.zero
-        var bestUpward: CGFloat = 0
+        var bestScore: CGFloat = 0
 
         for (i, later) in samples.enumerated() {
             // 往回找一个间隔够长的取样点作参照
@@ -131,10 +151,10 @@ final class TouchTrackingView: UIView {
 
             let v = CGSize(width: (later.point.x - earlier.point.x) / dt,
                            height: (later.point.y - earlier.point.y) / dt)
-            // 屏幕坐标里往上是负的，所以越负越快
-            let upward = -v.height
-            if upward > bestUpward {
-                bestUpward = upward
+            // 屏幕坐标里往上是负的，所以越负越快；横向两个方向都算数
+            let score = axis == .up ? -v.height : abs(v.width)
+            if score > bestScore {
+                bestScore = score
                 best = v
             }
         }

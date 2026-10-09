@@ -34,6 +34,15 @@ struct RootView: View {
     /// 手指此刻往上拖了多少点。硬币靠它实时跟手。
     @State private var dragUp: CGFloat = 0
 
+    /// 手指此刻横向拖了多少点。硬币靠它实时跟手转动。
+    @State private var dragSide: CGFloat = 0
+
+    /// 手指此刻是不是按在屏幕上
+    @State private var dragging = false
+
+    /// 刚刚甩出去的那一拨
+    @State private var spinImpulse: SpinImpulse?
+
     /// 最近一次有效上划的速度，显示在调试信息条上
     @State private var lastSpeed: Double = 0
 
@@ -52,39 +61,61 @@ struct RootView: View {
                 startedAt: flipStartedAt,
                 dragUp: dragUp,
                 onFinished: { controller.finishFlip() },
+                dragSide: dragSide,
+                dragging: dragging,
+                spinImpulse: spinImpulse,
+                onSpinTick: { feedback.spinTick() },
                 showsHint: controller.showsHint
             )
 
             // 透明手势板，盖在 3D 画面之上
             SwipeCatcher { translation in
-                // 手指移动中：把往上拖了多远报给画面，硬币实时跟着抬起。
+                // 手指移动中：把拖了多远报给画面，硬币实时跟着抬起和转动。
                 // 往下拖按 0 算，硬币不会被按进平面里。
+                dragging = true
                 dragUp = max(-translation.height, 0)
+                dragSide = translation.width
 
-                // 手指刚一往上带就预热震动器。
+                // 手指刚一动就预热震动器。
                 // 预热是一次不便宜的主线程操作，放在脱手那一帧做会让起手顿一下；
                 // 提前到手势刚开始时做，那会儿画面还没开始演，顿了也看不出来。
-                if !warmedUp && dragUp > 4 {
+                // 上下左右都要算——横拨自旋也要震动。
+                if !warmedUp && max(dragUp, abs(dragSide)) > 4 {
                     warmedUp = true
                     feedback.warmUp()
                 }
 
-            } onDragEnded: { translation, velocity in
+            } onDragEnded: { drag in
                 dragUp = 0
+                dragSide = 0
+                dragging = false
                 warmedUp = false
-                guard case .swipeUp(let speed, let distance) = SwipeDetector.evaluate(
-                    translation: translation, velocity: velocity
-                ) else { return }   // 不算上划：硬币会自己缓缓落回平面
 
-                lastSpeed = speed
+                // ⚠️ 必须先问上划、再问横拨。两者的允许范围有一小段重叠，
+                //    重叠时按上划算——想抛却被判成拨，比反过来更让人恼火。
+                if case .swipeUp(let speed, let distance) = SwipeDetector.evaluate(
+                    translation: drag.translation, velocity: drag.upVelocity
+                ) {
+                    lastSpeed = speed
 
-                // 大脑说了算：抛掷中它会返回空，这一划就被忽略
-                if let plan = controller.requestFlip(speed: speed, distance: distance) {
-                    let now = Date()
-                    flipStartedAt = now
-                    // 把这一次所有的磕碰排进队列，画面和声音照的是同一张表
-                    feedback.schedule(plan, startedAt: now)
+                    // 大脑说了算：抛掷中它会返回空，这一划就被忽略
+                    if let plan = controller.requestFlip(speed: speed, distance: distance) {
+                        let now = Date()
+                        flipStartedAt = now
+                        // 把这一次所有的磕碰排进队列，画面和声音照的是同一张表
+                        feedback.schedule(plan, startedAt: now)
+                    }
+                    return
                 }
+
+                // 横拨：原地自旋。它不经过大脑——只绕竖直轴转，
+                // 朝上的是哪一面完全不受影响，所以结果和存档都不用动。
+                if case .spin(let speed) = SwipeDetector.evaluateSpin(
+                    translation: drag.translation, velocity: drag.sideVelocity
+                ), controller.phase.acceptsFlip {
+                    spinImpulse = SpinImpulse(sideSpeed: speed)
+                }
+                // 两样都不算：硬币会自己缓缓落回平面
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea()
