@@ -58,7 +58,7 @@ final class CoinControllerTests: XCTestCase {
         store.clear()
         let c = makeController()
         c.start()
-        let plan = c.requestFlip(speed: 1200)
+        let plan = c.requestFlip(speed: 1200, distance: 200)
         XCTAssertNotNil(plan)
         XCTAssertFalse(c.phase.acceptsFlip, "抛掷中应该不接受上划")
     }
@@ -68,7 +68,7 @@ final class CoinControllerTests: XCTestCase {
         store.save(.sun)
         let c = makeController()
         c.start()
-        XCTAssertNotNil(c.requestFlip(speed: 800))
+        XCTAssertNotNil(c.requestFlip(speed: 800, distance: 200))
     }
 
     /// ★ 抛掷中再上划：返回空，状态和时间表都不变
@@ -76,11 +76,11 @@ final class CoinControllerTests: XCTestCase {
         store.clear()
         let c = makeController()
         c.start()
-        let first = c.requestFlip(speed: 1500)
+        let first = c.requestFlip(speed: 1500, distance: 200)
         let phaseAfterFirst = c.phase
 
         for _ in 0..<5 {
-            XCTAssertNil(c.requestFlip(speed: 3000), "抛掷中的上划应被忽略")
+            XCTAssertNil(c.requestFlip(speed: 3000, distance: 200), "抛掷中的上划应被忽略")
         }
         XCTAssertEqual(c.phase, phaseAfterFirst, "被忽略的上划不该改变状态")
 
@@ -94,7 +94,7 @@ final class CoinControllerTests: XCTestCase {
         store.clear()
         let c = makeController()
         c.start()
-        let plan = c.requestFlip(speed: 1000)!
+        let plan = c.requestFlip(speed: 1000, distance: 200)!
         // 此刻还没调用 finishFlip，但抽屉里已经有结果了
         XCTAssertEqual(store.load(), plan.result, "结果应在上划瞬间就存档")
     }
@@ -106,7 +106,7 @@ final class CoinControllerTests: XCTestCase {
         store.clear()
         let c = makeController()
         c.start()
-        let plan = c.requestFlip(speed: 1000)!
+        let plan = c.requestFlip(speed: 1000, distance: 200)!
         c.finishFlip()
         XCTAssertEqual(c.phase, .resting(plan.result))
     }
@@ -116,7 +116,7 @@ final class CoinControllerTests: XCTestCase {
         store.clear()
         let c = makeController()
         c.start()
-        let plan = c.requestFlip(speed: 2000)!
+        let plan = c.requestFlip(speed: 2000, distance: 200)!
         c.interrupt()
         XCTAssertEqual(c.phase, .resting(plan.result))
         XCTAssertEqual(store.load(), plan.result)
@@ -142,7 +142,7 @@ final class CoinControllerTests: XCTestCase {
 
         var previousFace = CoinFace.sun
         for i in 0..<100 {
-            let plan = c.requestFlip(speed: Double.random(in: 0...4000))!
+            let plan = c.requestFlip(speed: Double.random(in: 0...4000), distance: 200)!
             XCTAssertEqual(plan.startFace, previousFace, "第 \(i + 1) 次的起始面不对")
             XCTAssertEqual(FlipPlanner.finalFace(of: plan), plan.result, "第 \(i + 1) 次显示面与结果不一致")
             c.finishFlip()

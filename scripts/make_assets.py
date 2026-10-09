@@ -355,6 +355,48 @@ def make_environment():
     print(f"  {path.name}  {W}x{H}  {path.stat().st_size // 1024} KB")
 
 
+# ─────────────────────────── 地面与阴影 ───────────────────────────
+
+def radial_png(name, size, color, peak, falloff, power=2.0):
+    """
+    画一张"中间浓、四周化开"的圆形贴图。
+
+    透明度按到中心的距离平滑衰减到 0，所以贴到场景里不会有任何硬边——
+    这是"地面和背景自然融合、看不出地平线"的关键。
+    """
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
+    c = (size - 1) / 2
+    r = np.sqrt((xx - c) ** 2 + (yy - c) ** 2) / c
+
+    alpha = np.exp(-((r / falloff) ** power)) * peak
+    alpha[r > 1] = 0                                  # 圆外一律全透明
+    # 贴着边缘再收一道，杜绝圆形的轮廓线
+    alpha *= np.clip((1 - r) / 0.55, 0, 1) ** 1.4
+
+    rgb = np.zeros((size, size, 3), dtype=np.uint8)
+    rgb[:, :] = color
+    img = Image.fromarray(rgb, "RGB").convert("RGBA")
+    img.putalpha(Image.fromarray((alpha * 255).astype(np.uint8), "L"))
+
+    path = OUT / f"{name}.png"
+    img.save(path, "PNG", optimize=True)
+    print(f"  {path.name}  {size}x{size}  {path.stat().st_size // 1024} KB")
+
+
+def make_ground_and_shadow():
+    # 地面：硬币脚下一小片微亮的地，半透明，向外化进黑背景。
+    #
+    # 它必须是半透明的：半透明的东西不写深度，才不会挡住穿过它的硬币。
+    # 它和阴影谁先画，不靠透明度决定，由 GroundShadow 里的排序分组指定。
+    radial_png("ground_fade", 512, color=(74, 76, 84),
+               peak=0.95, falloff=0.34, power=1.6)
+
+    # 阴影：纯黑，中间最浓，边缘很散，压在地面上。
+    # 硬币越高，这张图会被放得越大、调得越淡，自然就"变大变散变淡"。
+    radial_png("shadow_soft", 512, color=(0, 0, 0),
+               peak=1.0, falloff=0.36, power=1.7)
+
+
 # ─────────────────────────── 音效 ───────────────────────────
 
 def metal_ring(partials, dur, fast, slow, slow_share, noise=0.0, grain=0.0, seed=11):
@@ -453,6 +495,8 @@ if __name__ == "__main__":
             print(f"  {path.name}  {img.size[0]}x{img.size[1]}  {path.stat().st_size // 1024} KB")
     print("生成环境贴图：")
     make_environment()
+    print("生成地面与阴影：")
+    make_ground_and_shadow()
     print("生成音效：")
     make_sounds()
     print("完成。")

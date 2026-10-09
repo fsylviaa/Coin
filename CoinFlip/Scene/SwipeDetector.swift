@@ -13,19 +13,19 @@ import CoreGraphics
 enum SwipeDetector {
 
     /// 至少要往上划这么多点，才算数
-    static let minDistance: Double = 40
+    static let minDistance: Double = 26
 
     /// 至少要有这么快（点/秒），才算数
-    static let minSpeed: Double = 220
+    static let minSpeed: Double = 150
 
     /// 允许的倾斜程度：横向移动不能超过纵向移动的这个倍数。
     /// 1.0 表示方向要偏向上，斜着划 45 度以内都算上划，再歪就不算了。
-    static let maxHorizontalRatio: Double = 1.0
+    static let maxHorizontalRatio: Double = 1.3
 
     /// 一次手势的判定结果
     enum Result: Equatable {
-        /// 有效上划，附带速度（点/秒，正数）
-        case swipeUp(speed: Double)
+        /// 有效上划，附带峰值速度（点/秒）和往上划的距离（点），都是正数
+        case swipeUp(speed: Double, distance: Double)
         /// 不算上划
         case ignored
     }
@@ -45,6 +45,6 @@ enum SwipeDetector {
         guard upSpeed >= minSpeed else { return .ignored }           // 划得太慢
         guard sideways <= up * maxHorizontalRatio else { return .ignored }  // 太歪，不算上划
 
-        return .swipeUp(speed: upSpeed)
+        return .swipeUp(speed: upSpeed, distance: up)
     }
 }

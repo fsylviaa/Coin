@@ -15,11 +15,22 @@ enum FlipPlanner {
     /// 比真实的 9.8 小，硬币飞起来更舒缓，符合"沉静"的定位。数字越小飞得越慢。
     static let gravity: Double = 5.0
 
-    /// 低于这个上划速度（点/秒），一律按最低高度处理，避免手抖也把硬币抛出去。
+    /// 低于这个上划速度（点/秒），速度这一项不加分，避免手抖也把硬币抛出去。
     static let minSpeed: Double = 300
 
-    /// 达到这个上划速度，就抛到最高。再快也不会更高，免得飞出屏幕。
+    /// 达到这个上划速度，速度这一项就满了。再快也不会更高，免得飞出屏幕。
     static let maxSpeed: Double = 3000
+
+    /// 低于这个上划距离（点），距离这一项不加分
+    static let minDistance: Double = 40
+
+    /// 达到这个上划距离，距离这一项就满了
+    static let maxDistance: Double = 320
+
+    /// 速度占用力程度的几成，剩下的归距离。
+    /// 偏向速度是因为"甩"的爽快主要来自撒手那一下；
+    /// 但拖拽是看得见的蓄力动作，完全不算数会让人觉得白拖了。
+    static let speedWeight: Double = 0.7
 
     /// 最轻一划时翻几个半圈
     static let minHalfTurns: Int = 2
@@ -45,7 +56,13 @@ enum FlipPlanner {
 
     /// 落地后摇摆时，硬币在平面上打几圈转。
     /// 不宜多——转太快就糊成一团，反而看不出是硬币在晃。
-    static let wobbleTurns: Double = 1.2
+    /// 落地后在平面上打转多少圈。
+    ///
+    /// ★ 必须是整数圈。★ 不是整圈的话，停稳那一刻硬币的朝向
+    ///   和它一路转过来的朝向对不上，会原地突然扭一下——
+    ///   看起来就像"落地看到的面和最后给的面接不上"。
+    ///   FlipAnimator 会把它取整，但这里本来就该写整数。
+    static let wobbleTurns: Double = 1.0
 
     /// 摇摆至少要持续这么久（秒），哪怕弹跳早就结束了。
     /// 太短就没有"晃几下才躺稳"的感觉。
@@ -95,13 +112,17 @@ enum FlipPlanner {
     ///   - startFace: 抛之前朝上的那一面
     ///   - result: 已经决定好的结果
     ///   - style: 风格档案，提供高度上下限和弹性
+    /// - Parameters:
+    ///   - speed: 手势里往上最快的那一下有多快（点/秒）
+    ///   - distance: 手指一共往上划了多远（点）
     static func makePlan(speed: Double,
+                         distance: Double,
                          startFace: CoinFace,
                          result: CoinFace,
                          style: StyleProfile = .silver) -> FlipPlan {
 
-        // 1. 把上划速度换算成 0~1 的"用力程度"
-        let force = forceFactor(speed: speed)
+        // 1. 把速度和距离一起换算成 0~1 的"用力程度"
+        let force = forceFactor(speed: speed, distance: distance)
 
         // 2. 用力程度决定抛多高
         let height = lerp(from: style.minHeight, to: style.maxHeight, factor: force)
@@ -165,12 +186,21 @@ enum FlipPlanner {
 
     // MARK: - 小工具
 
-    /// 把上划速度压成 0~1 的"用力程度"。
-    /// 慢于 minSpeed 算 0（最轻），快过 maxSpeed 算 1（最重）。
-    static func forceFactor(speed: Double) -> Double {
-        guard speed > minSpeed else { return 0 }
-        guard speed < maxSpeed else { return 1 }
-        return (speed - minSpeed) / (maxSpeed - minSpeed)
+    /// 把速度和距离一起压成 0~1 的"用力程度"。
+    ///
+    /// 两项各自先压到 0~1，再按 speedWeight 加权。
+    /// 所以"又快又长"才到得了最高；只快不长、或只长不快，都只到一部分。
+    static func forceFactor(speed: Double, distance: Double) -> Double {
+        let fast = ramp(speed, from: minSpeed, to: maxSpeed)
+        let far = ramp(distance, from: minDistance, to: maxDistance)
+        return speedWeight * fast + (1 - speedWeight) * far
+    }
+
+    /// 把一个值从 from~to 压到 0~1，超出范围就贴边
+    private static func ramp(_ value: Double, from low: Double, to high: Double) -> Double {
+        guard value > low else { return 0 }
+        guard value < high else { return 1 }
+        return (value - low) / (high - low)
     }
 
     /// 在两个数之间按比例取值。

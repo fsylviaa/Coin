@@ -42,7 +42,7 @@ enum FlipAnimator {
 
         if t >= plan.endTime {
             return Pose(height: 0, degrees: total,
-                        wobbleDegrees: FlipPlanner.wobbleTurns * 360, isFinished: true)
+                        wobbleDegrees: wobbleEndDegrees, isFinished: true)
         }
 
         return Pose(height: height(at: t, plan: plan) * heightScale,
@@ -140,7 +140,17 @@ enum FlipAnimator {
         guard t > plan.landTime else { return 0 }
         let p = settleProgress(at: t, plan: plan)
         let eased = 3 * p * p - 2 * p * p * p      // 缓入缓出
-        return FlipPlanner.wobbleTurns * 360 * eased
+        return wobbleEndDegrees * eased
+    }
+
+    /// 打转一共转过多少度。
+    ///
+    /// ★ 取整到整圈。★ 画面在停稳那一刻会把硬币摆成干净的躺平姿态，
+    ///   那个姿态是不带打转的。如果打转停在半圈上，这两者就对不上，
+    ///   硬币会在最后一帧原地扭一下，像是突然换了一面。
+    ///   取整之后，转完正好回到出发时的朝向，两边严丝合缝。
+    static var wobbleEndDegrees: Double {
+        FlipPlanner.wobbleTurns.rounded() * 360
     }
 
     /// 落地之后到停稳之间走了多少（0 到 1）

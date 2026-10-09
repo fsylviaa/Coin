@@ -39,6 +39,9 @@ enum CoinScene {
 
     /// 推近用多久（秒）。慢，才有端到眼前的从容感
     static let zoomInSeconds: Double = 1.1
+
+    /// 镜头比硬币停稳提前多少秒开始推近，让两段动作接上，中间不空拍
+    static let zoomLeadSeconds: Double = 0.5
     /// 拉回用多久。快，不耽误下一次抛掷
     static let zoomOutSeconds: Double = 0.22
 
@@ -52,6 +55,18 @@ enum CoinScene {
     /// 金属几乎不吃这几盏灯，它的明暗主要来自环境反射。
     /// 灯开大了反而会把亮暗之间填平，硬币就发灰了，所以这个数很小。
     static let lightGain: Float = 0.35
+
+    // 跟手拖拽
+    /// 手指能把硬币从平面上提起多高（场景单位）。到顶就不再升，避免拖出画面。
+    static let maxDragLift: Float = 0.30
+    /// 手指往上划多少点，硬币就提到大约七成高。数字越小越"轻飘"。
+    static let dragSoftness: Float = 150
+    /// 提到最高时硬币歪多少度，像被从桌面上掀起一角
+    static let dragTilt: Float = 16
+    /// 跟手的黏滞感。越小越贴手指，太小会显得生硬
+    static let dragFollowSeconds: Double = 0.045
+    /// 松手但没甩出去时，落回平面要多久
+    static let dragReturnSeconds: Double = 0.22
 
     // 等待时的镜头微动。
     // 硬币是躺在平面上的，自己不该浮起来，所以改成镜头极缓慢地游移，
@@ -71,6 +86,10 @@ enum CoinScene {
 final class CoinSceneState {
     var coin: Entity?
     var camera: Entity?
+    /// 贴地的那片阴影。只建一次，之后每帧只改缩放和透明度。
+    var shadow: ModelEntity?
+    /// 上一次用的阴影透明度档位，跨档才换材质
+    var shadowStep: Int = -1
     var phase: CoinPhase = .waiting
     var startedAt: Date?
     var onFinished: () -> Void = {}
@@ -79,6 +98,13 @@ final class CoinSceneState {
     var finishReported = false
     /// 镜头推近的程度：0 是常态，1 是特写
     var zoom: Double = 0
+    /// 手指从按下到现在往上拖了多少点（屏幕点）
+    var dragUp: CGFloat = 0
+    /// 硬币当前被提起多高。它平滑地追 dragUp，所以松手会自己落回去。
+    var lift: Float = 0
+    /// 脱手那一刻硬币已经被提到多高。飞行时要从这个高度接上，不能跳。
+    var launchLift: Float = 0
+
     /// 上一帧是什么时候，用来算每帧间隔
     var lastTick: Date?
     /// 等待状态是从什么时候开始的，用来算呼吸的相位
@@ -93,6 +119,9 @@ struct CoinSceneView: View {
     /// 这一次抛掷是什么时候脱手的
     var startedAt: Date?
 
+    /// 手指此刻往上拖了多少点。硬币靠它实时跟手。
+    var dragUp: CGFloat = 0
+
     /// 动画演完时调用一次
     var onFinished: () -> Void = {}
 
@@ -103,6 +132,12 @@ struct CoinSceneView: View {
             let coin = makeCoin()
             coin.name = "coin"
             content.add(coin)
+            content.add(GroundShadow.makeGround())
+
+            let shadow = GroundShadow.makeShadow()
+            content.add(shadow)
+            state.shadow = shadow
+
             content.add(makeLights())
 
             let camera = makeCamera()
@@ -127,11 +162,18 @@ struct CoinSceneView: View {
             if state.phase != phase {
                 // 刚从抛掷切回等待，呼吸要从头开始，不然会突然跳一下
                 if case .waiting = phase { state.idleSince = Date() }
+                if case .flipping = phase {
+                    // 脱手这一刻硬币已经被手指提到一定高度，
+                    // 记下来，飞行曲线要从这里接上，不能从地面重新开始。
+                    state.launchLift = state.lift
+                    state.lift = 0
+                }
                 state.phase = phase
                 state.finishReported = false
             }
             state.startedAt = startedAt
             state.onFinished = onFinished
+            state.dragUp = dragUp
         }
         .background(.black)
         .ignoresSafeArea()
@@ -144,8 +186,55 @@ struct CoinSceneView: View {
         let dt = min(now.timeIntervalSince(state.lastTick ?? now), 0.05)
         state.lastTick = now
 
+        updateLift(dt: dt)
         updateCamera(dt: dt, now: now)
         updateCoin(now: now)
+        updateShadow()
+    }
+
+    /// 让阴影跟上硬币此刻的位置和高度。
+    ///
+    /// 放在摆完硬币之后，所以读到的永远是这一帧的真实位置——
+    /// 飞行、弹跳、跟手抬起都走同一条路，不会出现阴影跳一下的情况。
+    ///
+    /// 开了系统的"减少动态效果"时，阴影固定在贴地那一档不再变化，
+    /// 既保留了承托感，也不会有随高度收放的动态。
+    private func updateShadow() {
+        guard let shadow = state.shadow, let coin = state.coin else { return }
+
+        let position = UIAccessibility.isReduceMotionEnabled
+            ? SIMD3<Float>(coin.position.x, 0, coin.position.z)
+            : coin.position
+        state.shadowStep = GroundShadow.update(shadow,
+                                               coinPosition: position,
+                                               lastStep: state.shadowStep)
+    }
+
+    /// 手指把硬币提起多高。
+    ///
+    /// 不是手指移多少硬币就移多少——那样一甩就飞出画面。
+    /// 用的是"越往上越使不上劲"的曲线：开头跟得很紧，接近上限时几乎提不动了，
+    /// 像真的在对抗某种阻力。
+    private func liftTarget(for dragUp: CGFloat) -> Float {
+        guard dragUp > 0 else { return 0 }
+        let d = Float(dragUp)
+        return CoinScene.maxDragLift * (1 - exp(-d / CoinScene.dragSoftness))
+    }
+
+    /// 让硬币平滑地追上手指。
+    ///
+    /// 往上追得紧（贴手），松手落回时慢一些（有重量感）。
+    /// 因为是"每帧往目标靠一点"，松手时目标自动变成 0，硬币就自己落回去了，
+    /// 不需要单独写一段"回弹动画"。
+    private func updateLift(dt: Double) {
+        if case .flipping = state.phase { return }
+
+        let target = liftTarget(for: state.dragUp)
+        let seconds = target > state.lift
+            ? CoinScene.dragFollowSeconds
+            : CoinScene.dragReturnSeconds
+        let k = Float(1 - exp(-dt / max(seconds / 3, 0.0001)))
+        state.lift += (target - state.lift) * k
     }
 
     /// 镜头：落定之后缓缓绕到上方并推近，一旦开抛就迅速退回低角度常态。
@@ -156,7 +245,15 @@ struct CoinSceneView: View {
         guard let camera = state.camera else { return }
 
         let target: Double = {
+            // 手指一按住往上带，就先退回常态景别，给接下来的抛掷腾出空间
+            if state.dragUp > 10 { return 0 }
             if case .resting = state.phase { return 1 }
+            // 不等彻底停稳就开始抬镜头。摇摆的最后那一段幅度已经很小，
+            // 非要等它走完，画面上就会空出一拍，像卡住了。
+            if case .flipping(let plan) = state.phase, let startedAt = state.startedAt {
+                let t = now.timeIntervalSince(startedAt)
+                if t >= plan.endTime - CoinScene.zoomLeadSeconds { return 1 }
+            }
             return 0
         }()
 
@@ -204,7 +301,14 @@ struct CoinSceneView: View {
             let t = now.timeIntervalSince(startedAt)
             let pose = FlipAnimator.pose(at: t, plan: plan,
                                          heightScale: Double(CoinScene.heightScale))
-            coin.position = [0, Float(pose.height), 0]
+
+            // 脱手时硬币已经被提到 launchLift，飞行曲线要从那里接上，
+            // 否则会看到硬币先"掉"回地面再飞起来。
+            // 这段额外高度在升到最高点前均匀让渡给抛物线本身。
+            let carry = plan.landTime > 0
+                ? state.launchLift * Float(max(0, 1 - t / plan.landTime))
+                : 0
+            coin.position = [0, Float(pose.height) + carry, 0]
 
             if pose.isFinished {
                 // 停稳时摆成干净的躺平姿态，不留累加的零头。
@@ -212,7 +316,11 @@ struct CoinSceneView: View {
                 coin.transform.rotation = Self.restingRotation(for: plan.result)
                 if !state.finishReported {
                     state.finishReported = true
-                    state.onFinished()
+                    // 挪到这一帧画完之后再通知。
+                    // 这里是渲染回调里，当场改状态会让 SwiftUI 在一帧中途
+                    // 重建整棵界面树，正好卡在硬币停稳那一刻，看起来就是顿一下。
+                    let notify = state.onFinished
+                    DispatchQueue.main.async { notify() }
                 }
             } else {
                 coin.transform.rotation = Self.flightRotation(
@@ -223,14 +331,24 @@ struct CoinSceneView: View {
             }
 
         case .waiting:
-            // 躺在平面上，一动不动。画面的呼吸感交给镜头的缓慢游移。
-            coin.position = .zero
-            coin.transform.rotation = Self.restingRotation(for: .sun)
+            applyLift(to: coin, face: .sun)
 
         case .resting(let face):
-            coin.position = .zero
-            coin.transform.rotation = Self.restingRotation(for: face)
+            applyLift(to: coin, face: face)
         }
+    }
+
+    /// 没在抛的时候：硬币躺在平面上，但会跟着手指被提起来。
+    ///
+    /// 提起的同时让它歪一点，像被从桌面上掀起一角——
+    /// 纯粹平移上升看着像"浮空"，加一点倾斜才有被捏住的实感。
+    private func applyLift(to coin: Entity, face: CoinFace) {
+        coin.position = [0, state.lift, 0]
+
+        let ratio = CoinScene.maxDragLift > 0 ? state.lift / CoinScene.maxDragLift : 0
+        let tilt = CoinScene.dragTilt * ratio * .pi / 180
+        coin.transform.rotation = simd_quatf(angle: tilt, axis: [1, 0, 0])
+            * Self.restingRotation(for: face)
     }
 
     // MARK: - 姿态

@@ -10,7 +10,13 @@ final class SwipeDetectorTests: XCTestCase {
 
     /// 取出判定结果里的速度；不是有效上划就返回 nil
     private func speed(_ result: SwipeDetector.Result) -> Double? {
-        if case .swipeUp(let s) = result { return s }
+        if case .swipeUp(let s, _) = result { return s }
+        return nil
+    }
+
+    /// 取出判定结果里往上划的距离
+    private func distance(_ result: SwipeDetector.Result) -> Double? {
+        if case .swipeUp(_, let d) = result { return d }
         return nil
     }
 
@@ -98,6 +104,13 @@ final class SwipeDetectorTests: XCTestCase {
         let r = SwipeDetector.evaluate(translation: .init(width: 300, height: -100),
                                        velocity: .init(width: 2000, height: -800))
         XCTAssertEqual(r, .ignored)
+    }
+
+    /// 判定结果要带上往上划的距离——用力程度要用到它
+    func testReportsUpwardDistance() {
+        let r = SwipeDetector.evaluate(translation: .init(width: 0, height: -180),
+                                       velocity: .init(width: 0, height: -1200))
+        XCTAssertEqual(distance(r), 180)
     }
 
     // MARK: - 门槛本身要讲得通

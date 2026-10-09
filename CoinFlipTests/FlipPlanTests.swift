@@ -12,27 +12,28 @@ final class FlipPlanTests: XCTestCase {
 
     /// 速度为 0（根本没划动）时，用最低高度，不能是 0 或负数
     func testZeroSpeedUsesMinHeight() {
-        let plan = FlipPlanner.makePlan(speed: 0, startFace: .sun, result: .sun, style: style)
+        let plan = FlipPlanner.makePlan(speed: 0, distance: 0, startFace: .sun, result: .sun, style: style)
         XCTAssertEqual(plan.height, style.minHeight)
     }
 
     /// 速度大到离谱时，高度被压在上限，不会飞出屏幕
     func testHugeSpeedUsesMaxHeight() {
-        let plan = FlipPlanner.makePlan(speed: 100_000, startFace: .sun, result: .sun, style: style)
+        let plan = FlipPlanner.makePlan(speed: 100_000, distance: 10_000, startFace: .sun, result: .sun, style: style)
         XCTAssertEqual(plan.height, style.maxHeight)
     }
 
     /// 划得越快，抛得越高
     func testFasterIsHigher() {
-        let slow = FlipPlanner.makePlan(speed: 200, startFace: .sun, result: .sun, style: style)
-        let fast = FlipPlanner.makePlan(speed: 500, startFace: .sun, result: .sun, style: style)
+        let slow = FlipPlanner.makePlan(speed: 200, distance: 60, startFace: .sun, result: .sun, style: style)
+        let fast = FlipPlanner.makePlan(speed: 500, distance: 120, startFace: .sun, result: .sun, style: style)
         XCTAssertGreaterThanOrEqual(fast.height, slow.height)
     }
 
     /// 任意速度下，时间顺序都必须是：开始 → 落地 → 停稳
     func testTimeOrder() {
         for speed in stride(from: 0.0, through: 5000.0, by: 50.0) {
-            let plan = FlipPlanner.makePlan(speed: speed, startFace: .sun, result: .moon, style: style)
+            let plan = FlipPlanner.makePlan(speed: speed, distance: speed / 10,
+                                            startFace: .sun, result: .moon, style: style)
             XCTAssertGreaterThan(plan.landTime, 0, "speed=\(speed) 落地时刻不是正数")
             XCTAssertGreaterThan(plan.endTime, plan.landTime, "speed=\(speed) 停稳不晚于落地")
         }
@@ -41,7 +42,7 @@ final class FlipPlanTests: XCTestCase {
     /// 弹起的高度 = 抛起高度 × 风格的弹性
     /// （小数计算有极微小误差，所以允许十亿分之一的偏差）
     func testBounceHeight() {
-        let plan = FlipPlanner.makePlan(speed: 1500, startFace: .sun, result: .sun, style: style)
+        let plan = FlipPlanner.makePlan(speed: 1500, distance: 200, startFace: .sun, result: .sun, style: style)
         XCTAssertEqual(plan.bounceHeight, plan.height * style.bounciness, accuracy: 1e-9)
     }
 
@@ -49,7 +50,7 @@ final class FlipPlanTests: XCTestCase {
     func testPlanKeepsResult() {
         for result in [CoinFace.sun, .moon] {
             for start in [CoinFace.sun, .moon] {
-                let plan = FlipPlanner.makePlan(speed: 900, startFace: start, result: result, style: style)
+                let plan = FlipPlanner.makePlan(speed: 900, distance: 150, startFace: start, result: result, style: style)
                 XCTAssertEqual(plan.result, result)
                 XCTAssertEqual(plan.startFace, start)
             }
@@ -59,7 +60,8 @@ final class FlipPlanTests: XCTestCase {
     /// 高度始终落在风格规定的上下限之间
     func testHeightAlwaysWithinRange() {
         for speed in stride(from: -500.0, through: 8000.0, by: 25.0) {
-            let plan = FlipPlanner.makePlan(speed: speed, startFace: .moon, result: .sun, style: style)
+            let plan = FlipPlanner.makePlan(speed: speed, distance: max(speed, 0) / 10,
+                                            startFace: .moon, result: .sun, style: style)
             XCTAssertGreaterThanOrEqual(plan.height, style.minHeight, "speed=\(speed)")
             XCTAssertLessThanOrEqual(plan.height, style.maxHeight, "speed=\(speed)")
         }
@@ -70,16 +72,37 @@ final class FlipPlanTests: XCTestCase {
     func testHalfTurnsWithinReasonableRange() {
         for speed in stride(from: 0.0, through: 8000.0, by: 25.0) {
             for result in [CoinFace.sun, .moon] {
-                let plan = FlipPlanner.makePlan(speed: speed, startFace: .sun, result: result, style: style)
+                let plan = FlipPlanner.makePlan(speed: speed, distance: speed / 10,
+                                                startFace: .sun, result: result, style: style)
                 XCTAssertGreaterThanOrEqual(plan.halfTurns, FlipPlanner.minHalfTurns, "speed=\(speed)")
                 XCTAssertLessThanOrEqual(plan.halfTurns, FlipPlanner.maxHalfTurns + 1, "speed=\(speed)")
             }
         }
     }
 
+    /// 距离也算进用力程度：同样的速度，划得越长抛得越高
+    func testLongerSwipeGoesHigher() {
+        let short = FlipPlanner.makePlan(speed: 1200, distance: 50,
+                                         startFace: .sun, result: .sun, style: style)
+        let long = FlipPlanner.makePlan(speed: 1200, distance: 300,
+                                        startFace: .sun, result: .sun, style: style)
+        XCTAssertGreaterThan(long.height, short.height, "划得更长却没抛得更高")
+    }
+
+    /// 只快不长、或只长不快，都到不了最高——要"又快又长"才行
+    func testNeitherAloneReachesMax() {
+        let fastOnly = FlipPlanner.makePlan(speed: 100_000, distance: 0,
+                                            startFace: .sun, result: .sun, style: style)
+        let longOnly = FlipPlanner.makePlan(speed: 0, distance: 100_000,
+                                            startFace: .sun, result: .sun, style: style)
+        XCTAssertLessThan(fastOnly.height, style.maxHeight)
+        XCTAssertLessThan(longOnly.height, style.maxHeight)
+        XCTAssertGreaterThan(fastOnly.height, longOnly.height, "速度应该占大头")
+    }
+
     /// 整个动画不能太长，否则等得不耐烦。最用力一划也要在 2.5 秒内停稳。
     func testTotalDurationIsAcceptable() {
-        let plan = FlipPlanner.makePlan(speed: 100_000, startFace: .sun, result: .moon, style: style)
+        let plan = FlipPlanner.makePlan(speed: 100_000, distance: 10_000, startFace: .sun, result: .moon, style: style)
         XCTAssertLessThan(plan.endTime, 2.5, "最用力一划要 \(plan.endTime) 秒才停稳，太久了")
     }
 }

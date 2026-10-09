@@ -39,13 +39,14 @@ final class CoinController {
     /// ⚠️ 注意第 3 行：结果一决定就马上存，不等落地。
     ///    这样即使硬币飞到一半 App 被系统杀掉，结果也不会丢。
     @discardableResult
-    func requestFlip(speed: Double) -> FlipPlan? {
+    func requestFlip(speed: Double, distance: Double) -> FlipPlan? {
         guard phase.acceptsFlip else { return nil }   // 抛掷中，直接忽略，不排队也不叠加
 
         let result = FlipPlanner.decideResult()
         store.save(result)                            // 立刻存档，先于动画
 
         let plan = FlipPlanner.makePlan(speed: speed,
+                                        distance: distance,
                                         startFace: phase.currentFace,
                                         result: result,
                                         style: style)

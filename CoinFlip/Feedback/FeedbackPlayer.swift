@@ -10,12 +10,17 @@
 import AVFoundation
 import UIKit
 
-/// ⚠️ 所有方法都必须在主线程调用。手势回调和排队用的都是主线程，所以天然满足。
+/// ⚠️ 所有方法都必须在主线程调用（手势回调和排队用的都是主线程，天然满足）。
+///    但真正发声的那几步会被转到后台队列上去做，不占用画面线程。
 final class FeedbackPlayer {
 
-    /// 同时最多叠几声。磕碰很密，一声没完下一声就来了，
-    /// 所以准备好几个播放器轮流用，不然会互相打断。
-    private static let voiceCount = 5
+    /// 同时最多叠几声。
+    ///
+    /// 落地音本身有 0.95 秒的余韵，而磕碰最密时每 50 毫秒就来一下——
+    /// 轮到某个播放器时它多半还在响。给一个正在响的播放器做跳转重置，
+    /// 是主线程上的一次慢操作，这就是停稳前那阵卡顿的来源之一。
+    /// 所以备足一次抛掷用得到的数量，让每一下都能拿到闲着的播放器。
+    private static let voiceCount = 14
 
     /// 落地与磕碰用的播放器，轮流使用
     private var landPlayers: [AVAudioPlayer] = []
@@ -28,6 +33,15 @@ final class FeedbackPlayer {
     private var pending: [DispatchWorkItem] = []
 
     private let impact = UIImpactFeedbackGenerator(style: .rigid)
+
+    /// 放声音专用的队列。
+    ///
+    /// ★ 声音绝不能在主线程上放。★ 主线程同时也是画面线程，
+    /// 一次 play 里夹着文件跳转，就会让这一帧画不完。
+    /// 磕碰最密的时候一帧里要放好几声，画面直接就卡住了。
+    /// 串行队列保证这些操作按顺序执行，不会互相打架。
+    private let audioQueue = DispatchQueue(label: "com.antheafsy.coinflip.audio",
+                                           qos: .userInitiated)
 
     // MARK: - 准备
 
@@ -111,27 +125,43 @@ final class FeedbackPlayer {
         let span = max(style.maxHeight - style.minHeight, 0.0001)
         let t = min(max((force - style.minHeight) / span, 0), 1)
 
-        player.currentTime = 0
-        player.volume = Float(0.45 + 0.55 * t)
-        player.play()
+        audioQueue.async {
+            player.currentTime = 0
+            player.volume = Float(0.45 + 0.55 * t)
+            player.play()
+        }
     }
 
     private func playSound(volume: Float) {
         guard !landPlayers.isEmpty else { return }
-        let player = landPlayers[nextVoice % landPlayers.count]
+        let players = landPlayers
+        let start = nextVoice
         nextVoice += 1
 
-        player.currentTime = 0
-        // 太轻的磕碰听不见也无妨，但不要是 0，否则后面几下整段消失
-        player.volume = max(volume, 0.02)
-        player.play()
+        audioQueue.async {
+            // 优先挑一个已经响完的，这样就不必做跳转重置
+            let count = players.count
+            var chosen = players[start % count]
+            for k in 0..<count {
+                let candidate = players[(start + k) % count]
+                if !candidate.isPlaying { chosen = candidate; break }
+            }
+            if chosen.isPlaying || chosen.currentTime > 0 { chosen.currentTime = 0 }
+            // 太轻的磕碰听不见也无妨，但不要是 0，否则后面几下整段消失
+            chosen.volume = max(volume, 0.02)
+            chosen.play()
+        }
     }
 
     /// 震动。太轻的磕碰就不震了——手感上分辨不出来，只会糊成一片。
+    ///
+    /// ⚠️ 这里**不要**在震完之后再调一次 prepare()。
+    ///    prepare() 是在启动震动马达，是一次不便宜的主线程操作；
+    ///    每下磕碰都调一次，落地那阵密集磕碰就会把画面拖垮。
+    ///    上划时 warmUp() 已经预热过，热度足够撑到这一次抛掷结束。
     private func playHaptic(strength: Double) {
         guard strength >= 0.12 else { return }
         impact.impactOccurred(intensity: CGFloat(min(strength, 1)))
-        impact.prepare()
     }
 
     // MARK: - 中断
@@ -139,10 +169,12 @@ final class FeedbackPlayer {
     /// 立刻停声、取消还没响的磕碰。切后台或被来电打断时调用。
     func stopAll() {
         cancelPending()
-        for player in landPlayers + [tossPlayer].compactMap({ $0 })
-        where player.isPlaying {
-            player.stop()
-            player.currentTime = 0
+        let players = landPlayers + [tossPlayer].compactMap { $0 }
+        audioQueue.async {
+            for player in players where player.isPlaying {
+                player.stop()
+                player.currentTime = 0
+            }
         }
     }
 

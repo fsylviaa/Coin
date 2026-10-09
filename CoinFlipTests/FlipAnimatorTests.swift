@@ -12,9 +12,10 @@ final class FlipAnimatorTests: XCTestCase {
     private let scale = 0.9
 
     private func makePlan(speed: Double = 1500,
+                          distance: Double = 200,
                           start: CoinFace = .sun,
                           result: CoinFace = .moon) -> FlipPlan {
-        FlipPlanner.makePlan(speed: speed, startFace: start, result: result)
+        FlipPlanner.makePlan(speed: speed, distance: distance, startFace: start, result: result)
     }
 
     private func total(_ plan: FlipPlan) -> Double {
@@ -143,8 +144,41 @@ final class FlipAnimatorTests: XCTestCase {
 
         let totalSpin = FlipAnimator.pose(at: plan.endTime, plan: plan, heightScale: scale)
             .wobbleDegrees
-        XCTAssertEqual(totalSpin, FlipPlanner.wobbleTurns * 360, accuracy: 1,
+        XCTAssertEqual(totalSpin, FlipAnimator.wobbleEndDegrees, accuracy: 1,
                        "打转的总圈数不对")
+    }
+
+    /// ★ 停稳那一刻不能跳。★
+    ///
+    /// 画面在停稳时会把硬币摆成干净的躺平姿态，那个姿态是不带打转的。
+    /// 所以打转必须正好转回出发时的朝向，也就是整数圈。
+    /// 差哪怕几十度，屏幕上都是硬币原地突然扭一下——
+    /// 看起来就像"落地看到的面和最后给的面接不上"。
+    func testSettleEndsFacingWhereItStarted() {
+        let leftover = FlipAnimator.wobbleEndDegrees
+            .truncatingRemainder(dividingBy: 360)
+        XCTAssertEqual(leftover, 0, accuracy: 1e-6,
+                       "打转停在了半圈上，收尾会突然扭一下")
+    }
+
+    /// 收尾的最后一帧和停稳的姿态必须几乎一样，不能有肉眼可见的跳变
+    func testLastFrameMatchesRestingPose() {
+        for speed in [400.0, 1500.0, 3000.0] {
+            let plan = makePlan(speed: speed)
+            let almost = FlipAnimator.pose(at: plan.endTime - 1.0 / 60,
+                                           plan: plan, heightScale: scale)
+            let ended = FlipAnimator.pose(at: plan.endTime,
+                                          plan: plan, heightScale: scale)
+
+            XCTAssertEqual(almost.degrees, ended.degrees, accuracy: 2,
+                           "速度 \(Int(speed))：最后一帧的翻转角跳了")
+            XCTAssertEqual(almost.wobbleDegrees.truncatingRemainder(dividingBy: 360),
+                           ended.wobbleDegrees.truncatingRemainder(dividingBy: 360),
+                           accuracy: 2,
+                           "速度 \(Int(speed))：最后一帧的朝向跳了")
+            XCTAssertEqual(almost.height, ended.height, accuracy: 1e-3,
+                           "速度 \(Int(speed))：最后一帧的高度跳了")
+        }
     }
 
     /// 打转的最快速度不能太离谱，否则屏幕上就是一团糊

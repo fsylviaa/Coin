@@ -20,10 +20,11 @@ final class ResultConsistencyTests: XCTestCase {
     func testFinalFaceAlwaysMatchesResult() {
         for i in 0..<1000 {
             let speed = Double.random(in: 0...4000)
+            let distance = Double.random(in: 0...400)
             let startFace = FlipPlanner.decideResult()
             let result = FlipPlanner.decideResult()
 
-            let plan = FlipPlanner.makePlan(speed: speed, startFace: startFace, result: result)
+            let plan = FlipPlanner.makePlan(speed: speed, distance: distance, startFace: startFace, result: result)
             let landed = FlipPlanner.finalFace(of: plan)
 
             XCTAssertEqual(
@@ -40,7 +41,8 @@ final class ResultConsistencyTests: XCTestCase {
         for startFace in [CoinFace.sun, .moon] {
             for result in [CoinFace.sun, .moon] {
                 for speed in stride(from: 0.0, through: 5000.0, by: 10.0) {
-                    let plan = FlipPlanner.makePlan(speed: speed, startFace: startFace, result: result)
+                    let plan = FlipPlanner.makePlan(speed: speed, distance: speed / 10,
+                                                    startFace: startFace, result: result)
                     XCTAssertEqual(
                         FlipPlanner.finalFace(of: plan), result,
                         "起始面 \(startFace) → 结果 \(result)，速度 \(Int(speed)) 时不一致"
@@ -59,7 +61,8 @@ final class ResultConsistencyTests: XCTestCase {
             // 速度在最轻和最重之间来回变化
             let speed = (i % 2 == 0) ? 0.0 : 5000.0
             let result = FlipPlanner.decideResult()
-            let plan = FlipPlanner.makePlan(speed: speed, startFace: .sun, result: result)
+            let plan = FlipPlanner.makePlan(speed: speed, distance: speed / 10,
+                                            startFace: .sun, result: result)
             if plan.result == .sun { sunCount += 1 }
         }
         XCTAssertGreaterThanOrEqual(sunCount, 4800, "日面次数偏少：\(sunCount)")

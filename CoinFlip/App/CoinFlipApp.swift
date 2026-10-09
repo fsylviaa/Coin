@@ -31,8 +31,14 @@ struct RootView: View {
     /// 这一次抛掷是什么时候脱手的。配合时间表算出每一帧该摆成什么样。
     @State private var flipStartedAt: Date?
 
+    /// 手指此刻往上拖了多少点。硬币靠它实时跟手。
+    @State private var dragUp: CGFloat = 0
+
     /// 最近一次有效上划的速度，显示在调试信息条上
     @State private var lastSpeed: Double = 0
+
+    /// 这一次手势有没有预热过震动器。手指一动就预热，脱手那一帧就不用再忙了。
+    @State private var warmedUp = false
 
     /// 声音与震动
     @State private var feedback = FeedbackPlayer()
@@ -44,22 +50,37 @@ struct RootView: View {
             CoinSceneView(
                 phase: controller.phase,
                 startedAt: flipStartedAt,
+                dragUp: dragUp,
                 onFinished: { controller.finishFlip() }
             )
 
             // 透明手势板，盖在 3D 画面之上
-            SwipeCatcher { translation, velocity in
-                guard case .swipeUp(let speed) = SwipeDetector.evaluate(
+            SwipeCatcher { translation in
+                // 手指移动中：把往上拖了多远报给画面，硬币实时跟着抬起。
+                // 往下拖按 0 算，硬币不会被按进平面里。
+                dragUp = max(-translation.height, 0)
+
+                // 手指刚一往上带就预热震动器。
+                // 预热是一次不便宜的主线程操作，放在脱手那一帧做会让起手顿一下；
+                // 提前到手势刚开始时做，那会儿画面还没开始演，顿了也看不出来。
+                if !warmedUp && dragUp > 4 {
+                    warmedUp = true
+                    feedback.warmUp()
+                }
+
+            } onDragEnded: { translation, velocity in
+                dragUp = 0
+                warmedUp = false
+                guard case .swipeUp(let speed, let distance) = SwipeDetector.evaluate(
                     translation: translation, velocity: velocity
-                ) else { return }
+                ) else { return }   // 不算上划：硬币会自己缓缓落回平面
 
                 lastSpeed = speed
 
                 // 大脑说了算：抛掷中它会返回空，这一划就被忽略
-                if let plan = controller.requestFlip(speed: speed) {
+                if let plan = controller.requestFlip(speed: speed, distance: distance) {
                     let now = Date()
                     flipStartedAt = now
-                    feedback.warmUp()
                     // 把这一次所有的磕碰排进队列，画面和声音照的是同一张表
                     feedback.schedule(plan, startedAt: now)
                 }
@@ -102,6 +123,7 @@ extension RootView {
             feedback.stopAll()
             controller.interrupt()
             flipStartedAt = nil
+            dragUp = 0
 
         @unknown default:
             break

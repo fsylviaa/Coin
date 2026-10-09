@@ -8,15 +8,22 @@
 // 所以这里直接处理最原始的触摸事件：手指按下、移动、抬起。
 // 这是触摸能走到的最前面一层，几乎不可能被拦下。
 //
-// 速度也是自己算的：取抬手前约 0.05 秒内的位移除以用时，
-// 这样量到的是"甩出去那一下"的快慢，而不是整段拖动的平均速度。
+// 速度也是自己算的，而且取的是**整个手势里最快的那一下**，不是抬手那一瞬间。
+//
+// 为什么：真人划屏幕时，手指常常在抬起前先慢下来——划到位、停一下、再松手。
+// 只看抬手那一瞬间的话，速度接近 0，一次明明很用力的上划会被判成无效。
+// 取峰值就贴合"你用了多大力气甩"这个真实意图。
 
 import SwiftUI
 import UIKit
 
 struct SwipeCatcher: UIViewRepresentable {
 
-    /// 手指每次抬起时调用，交出"一共移动了多少"和"抬手瞬间多快"。
+    /// 手指移动过程中持续调用，交出"从按下到现在一共移动了多少"。
+    /// 硬币靠它实时跟着手指走，所以必须每一帧都报，不能等到松手。
+    var onDragChanged: (CGSize) -> Void = { _ in }
+
+    /// 手指抬起时调用，交出"一共移动了多少"和"整个手势里最快的那一下"。
     /// 算不算有效上划由调用方交给 SwipeDetector 判断，这里不做判断。
     var onDragEnded: (CGSize, CGSize) -> Void
 
@@ -24,11 +31,13 @@ struct SwipeCatcher: UIViewRepresentable {
         let view = TouchTrackingView()
         view.backgroundColor = .clear
         view.isUserInteractionEnabled = true
+        view.onDragChanged = onDragChanged
         view.onDragEnded = onDragEnded
         return view
     }
 
     func updateUIView(_ uiView: TouchTrackingView, context: Context) {
+        uiView.onDragChanged = onDragChanged
         uiView.onDragEnded = onDragEnded
     }
 
@@ -45,10 +54,12 @@ struct SwipeCatcher: UIViewRepresentable {
 /// 直接记录触摸的透明板
 final class TouchTrackingView: UIView {
 
+    var onDragChanged: ((CGSize) -> Void)?
     var onDragEnded: ((CGSize, CGSize) -> Void)?
 
-    /// 算速度时往回看多久（秒）
-    private let velocityWindow: TimeInterval = 0.05
+    /// 算一小段速度时，跨多长时间取样（秒）。
+    /// 太短会被手抖放大，太长会把快慢抹平。
+    private let velocitySpan: TimeInterval = 0.045
 
     private var startPoint: CGPoint = .zero
     private var samples: [(point: CGPoint, time: TimeInterval)] = []
@@ -58,13 +69,19 @@ final class TouchTrackingView: UIView {
         guard let touch = touches.first else { return }
         startPoint = touch.location(in: self)
         samples = [(startPoint, touch.timestamp)]
+        onDragChanged?(.zero)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesMoved(touches, with: event)
         guard let touch = touches.first else { return }
-        samples.append((touch.location(in: self), touch.timestamp))
-        if samples.count > 40 { samples.removeFirst(samples.count - 40) }
+        let point = touch.location(in: self)
+        samples.append((point, touch.timestamp))
+        if samples.count > 80 { samples.removeFirst(samples.count - 80) }
+
+        // 实时上报，硬币才能跟着手指走
+        onDragChanged?(CGSize(width: point.x - startPoint.x,
+                              height: point.y - startPoint.y))
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -83,21 +100,44 @@ final class TouchTrackingView: UIView {
 
         let endPoint = touch.location(in: self)
         let endTime = touch.timestamp
+        samples.append((endPoint, endTime))
 
         let translation = CGSize(width: endPoint.x - startPoint.x,
                                  height: endPoint.y - startPoint.y)
 
-        // 找一个"抬手前约 0.05 秒"的位置作参照，算出最后那一下有多快
-        var velocity = CGSize.zero
-        let reference = samples.last { endTime - $0.time >= velocityWindow } ?? samples.first
-        if let reference {
-            let dt = endTime - reference.time
-            if dt > 0.004 {
-                velocity = CGSize(width: (endPoint.x - reference.point.x) / dt,
-                                  height: (endPoint.y - reference.point.y) / dt)
+        onDragChanged?(.zero)              // 手指离开，硬币不再被牵着
+        onDragEnded?(translation, peakUpwardVelocity())
+    }
+
+    /// 整个手势里"往上最快的那一下"有多快。
+    ///
+    /// 做法是沿着记录下来的轨迹滑动一个小窗口，逐段算速度，取往上最快的那一段。
+    /// 这样无论你是划到底直接松手，还是先停一下再松，量到的都是你真正用的力气。
+    private func peakUpwardVelocity() -> CGSize {
+        guard samples.count >= 2 else { return .zero }
+
+        var best = CGSize.zero
+        var bestUpward: CGFloat = 0
+
+        for (i, later) in samples.enumerated() {
+            // 往回找一个间隔够长的取样点作参照
+            var j = i - 1
+            while j > 0 && later.time - samples[j].time < velocitySpan { j -= 1 }
+            guard j >= 0 else { continue }
+
+            let earlier = samples[j]
+            let dt = later.time - earlier.time
+            guard dt > 0.004 else { continue }
+
+            let v = CGSize(width: (later.point.x - earlier.point.x) / dt,
+                           height: (later.point.y - earlier.point.y) / dt)
+            // 屏幕坐标里往上是负的，所以越负越快
+            let upward = -v.height
+            if upward > bestUpward {
+                bestUpward = upward
+                best = v
             }
         }
-
-        onDragEnded?(translation, velocity)
+        return best
     }
 }

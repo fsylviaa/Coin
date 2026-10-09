@@ -31,6 +31,8 @@ final class ResourcesTests: XCTestCase {
             (style.textureSun + "_normal", "png"),
             (style.textureMoon + "_normal", "png"),
             ("studio_env", "png"),
+            ("ground_fade", "png"),
+            ("shadow_soft", "png"),
             (style.tossSound, "wav"),
             (style.landSound, "wav"),
         ]
