@@ -21,7 +21,7 @@ import wave
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 SIZE = 1024                 # 成品贴图边长
 SS = 2                      # 先按 2 倍画再缩小，边缘才不会有锯齿
@@ -37,6 +37,17 @@ R_BEAD_OUTER = 0.868        # 外侧珠圈
 R_TEXT = 0.800              # 文字环中心线
 R_BEAD_INNER = 0.726        # 内侧珠圈
 R_FIELD = 0.706             # 同心细纹底的外沿
+
+# 日面的"日"、月面的"月"，**凸起的那一块上不要有同心圆纹**。
+#
+# 真的精制币就是这么做的：底子打上密密的同心纹，凸起的图案抛成镜面。
+# 两者的反差才是图案能"浮"出来的原因；要是凸起上也压着同心纹，
+# 整面就是糊的一片，看着又糙又平。
+#
+# 注意擦的是**凸起的形状本身**，不是一个圆盘——
+# 光芒与光芒之间的空隙仍然是底子，那里的同心纹要留着。
+MOTIF_RING_ERASE = 1.0      # 凸起上的同心纹擦掉多少（1 全擦净，0.5 只减淡）
+MOTIF_EDGE_BLUR = 5.0       # 凸起边缘擦出多软的过渡，避免留下生硬的分界线
 
 SUN_TEXT = "SOL · INVICTUS · LUX · AETERNA · MMXXVI"
 MOON_TEXT = "LUNA · REGINA · SILENTII · NOCTIS · MMXXVI"
@@ -107,49 +118,48 @@ def circular_text(layer: Image.Image, text: str, r: float, height: float, v: int
 
 # ─────────────────────────── 两面的图案 ───────────────────────────
 
-def sun_motif(major: Image.Image, fine: Image.Image):
+def sun_motif(major: Image.Image, rings: Image.Image,
+              texture: Image.Image, mask: Image.Image):
     """日面：中央圆盘 + 长短交错的光芒"""
     d = ImageDraw.Draw(major)
+    md = ImageDraw.Draw(mask)
     c = BIG / 2
 
-    # 长光芒和短光芒交替，长的更尖更细
+    # 长光芒和短光芒交替，长的更尖更细。
+    # 每一道都同时登记进 mask —— 它们是凸起的，上面不该有同心纹。
     long_rays, short_rays = 12, 12
     for i in range(long_rays):
         a = 2 * math.pi * i / long_rays - math.pi / 2
-        tip = polar(0.620, a)
-        base = 0.185
-        half = math.radians(4.4)
-        d.polygon([polar(base, a - half), tip, polar(base, a + half)], fill=235)
+        ray = [polar(0.185, a - math.radians(4.4)), polar(0.620, a),
+               polar(0.185, a + math.radians(4.4))]
+        d.polygon(ray, fill=235)
+        md.polygon(ray, fill=255)
 
     for i in range(short_rays):
         a = 2 * math.pi * (i + 0.5) / short_rays - math.pi / 2
-        tip = polar(0.470, a)
-        base = 0.185
-        half = math.radians(3.0)
-        d.polygon([polar(base, a - half), tip, polar(base, a + half)], fill=205)
+        ray = [polar(0.185, a - math.radians(3.0)), polar(0.470, a),
+               polar(0.185, a + math.radians(3.0))]
+        d.polygon(ray, fill=205)
+        md.polygon(ray, fill=255)
 
-    # 一圈很密的细放射线，铺在粗光芒底下，让中间不空
-    fd = ImageDraw.Draw(fine)
+    # 一圈很密的细放射线，铺在粗光芒底下，让中间不空。
+    # 它画在 texture 上而不是 rings 上：这是放射纹，不是同心纹，不该被擦掉。
+    td = ImageDraw.Draw(texture)
     hair = 150
     for i in range(hair):
         a = 2 * math.pi * i / hair
-        fd.line([polar(0.200, a), polar(0.600, a)], fill=255, width=max(2, int(BIG * 0.0013)))
+        td.line([polar(0.200, a), polar(0.600, a)], fill=255, width=max(2, int(BIG * 0.0013)))
 
-    # 中央圆盘，边上围一圈小珠
+    # 中央圆盘，边上围一圈小珠。圆盘也是凸起的，一并登记。
     r_core = 0.150
-    d.ellipse([c - c * r_core, c - c * r_core, c + c * r_core, c + c * r_core], fill=170)
+    box = [c - c * r_core, c - c * r_core, c + c * r_core, c + c * r_core]
+    d.ellipse(box, fill=170)
+    md.ellipse(box, fill=255)
     beads(d, r_core, 40, 0.0125, 225)
 
-    # 圆盘内部也压上同心细纹
-    fd = ImageDraw.Draw(fine)
-    rr = 0.018
-    while rr < r_core - 0.012:
-        fd.ellipse([c - c * rr, c - c * rr, c + c * rr, c + c * rr],
-                   outline=255, width=max(2, int(BIG * 0.0012)))
-        rr += 0.0170
 
-
-def moon_motif(major: Image.Image, fine: Image.Image):
+def moon_motif(major: Image.Image, rings: Image.Image,
+               texture: Image.Image, mask: Image.Image):
     """月面：一弯新月 + 环形坑 + 散落的星"""
     c = BIG / 2
 
@@ -172,16 +182,27 @@ def moon_motif(major: Image.Image, fine: Image.Image):
 
     major.paste(crescent, (0, 0), crescent)
 
+    # 登记"月"凸起的形状：只圈月牙本身，不含周围的空底子——
+    # 月牙之外的同心纹要留着，它们是衬托月牙的底。
+    sil = Image.new("L", (BIG, BIG), 0)
+    sd = ImageDraw.Draw(sil)
+    sd.ellipse([c - c * r, c - c * r, c + c * r, c + c * r], fill=255)
+    sd.ellipse([cx - c * cut_r, cy - c * cut_r, cx + c * cut_r, cy + c * cut_r], fill=0)
+    mask.paste(sil, (0, 0), sil)
+
     # 星星：四角星，大小不一地散在月牙开口那侧
     d = ImageDraw.Draw(major)
+    md = ImageDraw.Draw(mask)
     for sx, sy, ss, v in [(0.300, -0.330, 0.042, 240), (0.455, -0.090, 0.028, 225),
                           (0.250, 0.230, 0.034, 232), (0.420, 0.330, 0.020, 215),
                           (0.115, -0.470, 0.022, 220), (0.520, 0.120, 0.016, 205)]:
         x, y, s = c + c * sx, c + c * sy, c * ss
-        d.polygon([(x, y - s), (x + s * 0.22, y - s * 0.22),
+        star = [(x, y - s), (x + s * 0.22, y - s * 0.22),
                    (x + s, y), (x + s * 0.22, y + s * 0.22),
                    (x, y + s), (x - s * 0.22, y + s * 0.22),
-                   (x - s, y), (x - s * 0.22, y - s * 0.22)], fill=v)
+                   (x - s, y), (x - s * 0.22, y - s * 0.22)]
+        d.polygon(star, fill=v)
+        md.polygon(star, fill=255)
 
 
 # ─────────────────────────── 组装一面 ───────────────────────────
@@ -189,7 +210,9 @@ def moon_motif(major: Image.Image, fine: Image.Image):
 def build_face(text: str, motif) -> tuple[Image.Image, Image.Image]:
     """画出一面的高度图，再产出两张贴图：看得见的彩色图，和描述起伏的法线图"""
     major = new_layer()     # 大块浮雕：外缘、珠圈、文字、图案
-    fine = new_layer()      # 细纹：底子上的同心线
+    rings = new_layer()     # 同心细纹。凸起的图案压在它上面时要把它擦掉
+    texture = new_layer()   # 其它细纹（如日面的放射线），不受擦除影响
+    mask = new_layer()      # 图案凸起的形状
     d = ImageDraw.Draw(major)
     c = BIG / 2
 
@@ -205,7 +228,7 @@ def build_face(text: str, motif) -> tuple[Image.Image, Image.Image]:
     circular_text(major, text, R_TEXT, 0.088, 225)
 
     # 底子上的同心细纹，从中心一直铺到文字环内侧
-    fd = ImageDraw.Draw(fine)
+    fd = ImageDraw.Draw(rings)
     rr = 0.020
     while rr < R_FIELD:
         fd.ellipse([c - c * rr, c - c * rr, c + c * rr, c + c * rr],
@@ -213,9 +236,27 @@ def build_face(text: str, motif) -> tuple[Image.Image, Image.Image]:
         rr += 0.0178
 
     # 中央主图案
-    motif(major, fine)
+    motif(major, rings, texture, mask)
+
+    # 凸起压在哪里，哪里的同心纹就被抹平——这是"图案是镜面、底子是纹路"的来源
+    fine = ImageChops.lighter(erase_rings_under(rings, mask), texture)
 
     return light(major, fine), normal_map(major, fine)
+
+
+def erase_rings_under(rings: Image.Image, mask: Image.Image) -> Image.Image:
+    """
+    把图案凸起压住的那一块上的同心纹擦掉。
+
+    在高度图这一层就擦干净，而不是等打光时再压——这样彩色贴图和法线贴图
+    用的是同一张高度图，不会出现"静止看着平滑、一转高光又把纹路带回来"。
+
+    边缘先糊一道再擦，所以是渐隐过去的，凸起周围不会留下一圈生硬的分界线。
+    """
+    soft = mask.filter(ImageFilter.GaussianBlur(MOTIF_EDGE_BLUR * SS))
+    keep = 1 - MOTIF_RING_ERASE * (np.array(soft, dtype=np.float32) / 255)
+    out = np.array(rings, dtype=np.float32) * keep
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "L")
 
 
 def light(major: Image.Image, fine: Image.Image) -> Image.Image:
