@@ -32,7 +32,11 @@ final class FeedbackPlayer {
     /// 已经排好队、还没响的磕碰。切后台时要全部取消。
     private var pending: [DispatchWorkItem] = []
 
-    private let impact = UIImpactFeedbackGenerator(style: .rigid)
+    /// 震动。整串磕碰是一次性排给它的，不占画面线程。
+    private let haptics = HapticPlayer()
+
+    /// 这一次的震动排进引擎了吗。没排成功（老机型、模拟器）就一下一下地补。
+    private var hapticsScheduled = false
 
     /// 放声音专用的队列。
     ///
@@ -80,9 +84,9 @@ final class FeedbackPlayer {
         }
     }
 
-    /// 上划的瞬间调用，让震动器提前热身，免得第一下迟到。
+    /// 手指一开始往上带就调用，让震动器提前热身，免得第一下迟到。
     func warmUp() {
-        impact.prepare()
+        haptics.warmUp()
     }
 
     // MARK: - 按时间表播放
@@ -97,6 +101,11 @@ final class FeedbackPlayer {
 
         // 脱手那一声。余韵很长，硬币升到高处时它还在响。
         playToss(force: plan.height)
+
+        // 震动整串一次性排给引擎，由它按时间自己播，主线程不用再管。
+        // 排不进去（模拟器、老机型）就退回"每下磕碰补一次"。
+        hapticsScheduled = haptics.play(plan,
+                                        elapsed: Date().timeIntervalSince(startedAt))
 
         for contact in plan.contacts {
             let delay = contact.time - Date().timeIntervalSince(startedAt)
@@ -115,7 +124,8 @@ final class FeedbackPlayer {
     /// 响一下。轻重由这次磕碰的强度决定。
     private func fire(strength: Double) {
         playSound(volume: Float(strength))
-        playHaptic(strength: strength)
+        // 震动已经整串排好了就别再补，否则会震两遍
+        if !hapticsScheduled { haptics.simpleTap(strength: strength) }
     }
 
     /// 抛起的那一声。抛得越高，弹得越响。
@@ -153,22 +163,13 @@ final class FeedbackPlayer {
         }
     }
 
-    /// 震动。太轻的磕碰就不震了——手感上分辨不出来，只会糊成一片。
-    ///
-    /// ⚠️ 这里**不要**在震完之后再调一次 prepare()。
-    ///    prepare() 是在启动震动马达，是一次不便宜的主线程操作；
-    ///    每下磕碰都调一次，落地那阵密集磕碰就会把画面拖垮。
-    ///    上划时 warmUp() 已经预热过，热度足够撑到这一次抛掷结束。
-    private func playHaptic(strength: Double) {
-        guard strength >= 0.12 else { return }
-        impact.impactOccurred(intensity: CGFloat(min(strength, 1)))
-    }
-
     // MARK: - 中断
 
     /// 立刻停声、取消还没响的磕碰。切后台或被来电打断时调用。
     func stopAll() {
         cancelPending()
+        haptics.stopAll()
+        hapticsScheduled = false
         let players = landPlayers + [tossPlayer].compactMap { $0 }
         audioQueue.async {
             for player in players where player.isPlaying {
