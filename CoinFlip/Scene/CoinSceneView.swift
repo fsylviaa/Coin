@@ -477,7 +477,11 @@ struct CoinSceneView: View {
         } else {
             shape = 0                              // 两次之间歇一下
         }
-        return Float(shape) * CoinScene.maxDragLift * CoinScene.hintRise
+        // 夹到 0~1 之间。
+        // 不夹的话，在"落回"正好走完的那一帧（x 恰好是 1），
+        // 1 − (3x² − 2x³) 这个式子会因为浮点误差算出 −2e-16 这样的极小负数，
+        // 硬币等于被往地面里按了一下。数值上看不见，但负的高度本身就是错的。
+        return Float(min(max(shape, 0), 1)) * CoinScene.maxDragLift * CoinScene.hintRise
     }
 
     /// 镜头：落定之后缓缓绕到上方并推近，一旦开抛就迅速退回低角度常态。

@@ -9,6 +9,15 @@ import XCTest
 
 final class FlipAnimatorTests: XCTestCase {
 
+    /// 两个朝向之间最短的那段弧有多少度（0~180）。
+    /// 359.6° 和 0.6° 其实只差 1 度，直接相减会得到 359。
+    static func shorterArc(_ a: Double, _ b: Double) -> Double {
+        var d = (a - b).truncatingRemainder(dividingBy: 360)
+        if d > 180 { d -= 360 }
+        if d < -180 { d += 360 }
+        return abs(d)
+    }
+
     private let scale = 0.9
 
     private func makePlan(speed: Double = 1500,
@@ -268,10 +277,11 @@ final class FlipAnimatorTests: XCTestCase {
 
             XCTAssertEqual(almost.degrees, ended.degrees, accuracy: 2,
                            "速度 \(Int(speed))：最后一帧的翻转角跳了")
-            XCTAssertEqual(almost.wobbleDegrees.truncatingRemainder(dividingBy: 360),
-                           ended.wobbleDegrees.truncatingRemainder(dividingBy: 360),
-                           accuracy: 2,
-                           "速度 \(Int(speed))：最后一帧的朝向跳了")
+            // ⚠️ 不能直接取余再比。359.6° 和 360° 是同一个朝向，
+            //    取余之后却成了 359.6 和 0，看着差了一整圈。
+            //    要比的是"两个朝向之间最短的那段弧"。
+            XCTAssertLessThan(Self.shorterArc(almost.wobbleDegrees, ended.wobbleDegrees), 2,
+                              "速度 \(Int(speed))：最后一帧的朝向跳了")
             XCTAssertEqual(almost.height, ended.height, accuracy: 1e-3,
                            "速度 \(Int(speed))：最后一帧的高度跳了")
         }
@@ -305,19 +315,36 @@ final class FlipAnimatorTests: XCTestCase {
     }
 
     /// 越接近躺平，收得越慢
-    func testRotationSlowsDownTowardTheEnd() {
+    /// 收平的节奏是"两头慢、中间快"。
+    ///
+    /// 这条以前写的是"刚落地要比临近躺平收得快"，那是加揭晓节拍之前的样子。
+    /// 现在故意让硬币落地后**先一直歪着**（歪着才读不出结果），
+    /// 所以开头反而是最慢的一段——旧的假设已经不成立，这里按新意图重写。
+    ///
+    /// 守的仍然是两件真事：开头要慢（答案藏得住），结尾要慢（不会被拍平）。
+    func testFlattenEasesInAndOut() {
         let plan = makePlan()
         let settle = plan.endTime - plan.landTime
-        let step = settle / 10
 
-        func turned(from a: Double, to b: Double) -> Double {
-            FlipAnimator.pose(at: b, plan: plan, heightScale: scale).degrees
-                - FlipAnimator.pose(at: a, plan: plan, heightScale: scale).degrees
+        /// 从 a 到 b 这一段，平均每秒收平多少度
+        func rate(_ a: Double, _ b: Double) -> Double {
+            let total = Double(plan.halfTurns) * 180
+            func tilt(_ p: Double) -> Double {
+                abs(total - FlipAnimator.pose(at: plan.landTime + settle * p,
+                                              plan: plan, heightScale: scale).degrees)
+            }
+            return (tilt(a) - tilt(b)) / (settle * (b - a))
         }
 
-        let early = turned(from: plan.landTime, to: plan.landTime + step)
-        let late = turned(from: plan.endTime - step, to: plan.endTime)
-        XCTAssertGreaterThan(early, late, "落地刚开始应该比临近躺平时收得快")
+        let opening = rate(0, 0.1)
+        let peak = rate(0.55, 0.75)
+        let closing = rate(0.99, 1.0)
+
+        XCTAssertLessThan(opening, peak * 0.4,
+                          "刚落地就开始躺平了，答案藏不住")
+        XCTAssertLessThan(closing, peak * 0.25,
+                          "快停稳时还在猛收，看着像被拍平的")
+        XCTAssertGreaterThan(peak, 0, "中段根本没在收平")
     }
 
     // MARK: - 正确性

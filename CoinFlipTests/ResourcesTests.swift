@@ -46,7 +46,7 @@ final class ResourcesTests: XCTestCase {
             }
             let size = (try? FileManager.default
                 .attributesOfItem(atPath: fileURL.path)[.size] as? Int) ?? 0
-            XCTAssertGreaterThan(size ?? 0, 1000, "\(name).\(ext) 太小了，可能是空文件")
+            XCTAssertGreaterThan(size, 1000, "\(name).\(ext) 太小了，可能是空文件")
         }
     }
 
