@@ -58,6 +58,13 @@ EDGE_RELIEF = 48                # 滚花凸起多少。★ 压低它 ★ 侧边�
 EDGE_LETTER = 150               # 刻字**凹进去**多少（内凹，不是凸起）
 EDGE_AO = 46                    # 凹槽里烘多深的暗。见 make_edge 里的说明
 
+# 刻字底下的滚花保留几成。
+# ★ 不要清到 0。★ 四段刻字加起来占整圈约一半，全清掉就等于半圈没有滚花，
+#   看着像缺了一块。留三成：滚花绕一整圈不断，字底下又足够干净，照样读得清。
+EDGE_PANEL_KEEP = 0.30
+EDGE_PANEL_PAD = 0.34           # 光面比字宽出多少（占厚度的比例）
+EDGE_PANEL_SOFT = 0.13          # 光面边缘化开多少，避免生硬的分界
+
 # 侧边刻字。两句都是对这枚硬币的注脚：
 #   ALEA IACTA EST   骰子已经掷下
 #   TERTIA VIA MANET 仍有第三条路  ← 彩蛋
@@ -435,15 +442,16 @@ def make_edge():
             tile = tile.rotate(180)
         text_img.paste(tile, (int(centre - tile_w / 2), 0), tile)
 
-        half = width / 2 + H * 0.55
+        half = width / 2 + H * EDGE_PANEL_PAD
         pd.rectangle([centre - half, 0, centre + half, H], fill=255)
 
     # 光面的边缘糊开，滚花是渐隐进去的，不会留下一道生硬的界
-    panel = panel.filter(ImageFilter.GaussianBlur(H * 0.16))
+    panel = panel.filter(ImageFilter.GaussianBlur(H * EDGE_PANEL_SOFT))
 
     # ── 合成高度：滚花凸起（正），刻字凹陷（负）
     reed_h = np.array(reeds, np.float32) / 255
-    keep = 1 - np.array(panel, np.float32) / 255
+    # 刻字底下的滚花压淡到 EDGE_PANEL_KEEP，而不是清成 0
+    keep = 1 - (1 - EDGE_PANEL_KEEP) * (np.array(panel, np.float32) / 255)
     text_h = np.array(text_img.filter(ImageFilter.GaussianBlur(1.1)), np.float32) / 255
 
     h = EDGE_RELIEF * reed_h * keep - EDGE_LETTER * text_h
@@ -472,7 +480,9 @@ def make_edge():
     for n in ("edge_silver", "edge_silver_normal"):
         f = OUT / f"{n}.png"
         print(f"  {f.name}  {W}x{H}  {f.stat().st_size // 1024} KB")
-    print(f"  绕一圈内凹刻字：{' ／ '.join(EDGE_PHRASES)}，各两遍，字底下清了滚花")
+    smooth = float((np.array(panel, np.float32) / 255).mean())
+    print(f"  绕一圈内凹刻字：{' ／ '.join(EDGE_PHRASES)}，各两遍")
+    print(f"  字底下的滚花压到 {EDGE_PANEL_KEEP:.0%}，受影响的范围占整圈 {smooth:.0%}")
 
 
 def d_textwidth(draw, text, font) -> float:
