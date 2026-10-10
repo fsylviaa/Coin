@@ -673,10 +673,20 @@ struct CoinSceneView: View {
         let body = ModelEntity(
             mesh: .generateCylinder(height: CoinScene.coinThickness,
                                     radius: CoinScene.coinRadius),
-            materials: [edgeMaterial()]
+            materials: [bodyMaterial()]
         )
         body.transform.rotation = simd_quatf(angle: .pi / 2, axis: [1, 0, 0])
         coin.addChild(body)
+
+        // 侧边的滚花与刻字。
+        // 套在饼身外面一丁点，和两个币面一样是"贴上去"的——
+        // 自己生成网格是为了能控制贴图怎么绕：横向绕一圈，纵向是厚度。
+        let band = ModelEntity(
+            mesh: Self.edgeMesh(radius: CoinScene.coinRadius + 0.0012,
+                                thickness: CoinScene.coinThickness),
+            materials: [edgeMaterial(textureNamed: style.textureEdge)]
+        )
+        coin.addChild(band)
 
         // 贴图稍微浮出饼身一丁点，避免和饼身表面重叠闪烁
         let offset = CoinScene.coinThickness / 2 + 0.0015
@@ -713,8 +723,11 @@ struct CoinSceneView: View {
             let a = 2 * Float.pi * Float(i) / Float(segments)
             positions.append([radius * cos(a), radius * sin(a), 0])
             normals.append([0, 0, 1])
-            // 贴图的竖直方向是从上往下数的，所以这里要反过来
-            uvs.append([0.5 + 0.5 * cos(a), 0.5 - 0.5 * sin(a)])
+            // ★ 横向要反着取。★
+            //   这里的 u 用 0.5 − 0.5·cos 而不是加，是因为贴到硬币上之后
+            //   横向会整个镜像过来：拉丁文会变成 И Я Ǝ 那样的反字。
+            //   竖直方向则不用反（反了的话字是上下颠倒，不是左右镜像）。
+            uvs.append([0.5 - 0.5 * cos(a), 0.5 - 0.5 * sin(a)])
         }
 
         var indices: [UInt32] = []
@@ -730,6 +743,51 @@ struct CoinSceneView: View {
 
         return (try? MeshResource.generate(from: [descriptor]))
             ?? .generatePlane(width: radius * 2, height: radius * 2)
+    }
+
+    /// 侧边那一圈的网格：一个没有盖子的圆筒。
+    ///
+    /// 为什么不用系统现成的圆柱：现成的那个贴图怎么绕是它说了算，
+    /// 滚花会歪、刻字会糊。这里自己定：
+    /// 横向（u）绕一圈正好 0 到 1，纵向（v）是硬币的厚度。
+    /// 接缝处 u 从 1 回到 0，所以贴图的图案必须能首尾相接——
+    /// 滚花是均匀重复的，刻字绕一圈整两遍，都对得上。
+    static func edgeMesh(radius: Float, thickness: Float,
+                         segments: Int = 192) -> MeshResource {
+        var positions: [SIMD3<Float>] = []
+        var normals: [SIMD3<Float>] = []
+        var uvs: [SIMD2<Float>] = []
+        let half = thickness / 2
+
+        for i in 0...segments {
+            let a = 2 * Float.pi * Float(i) / Float(segments)
+            // ★ 横向反着取，理由同币面。★ 不反的话边上的刻字是镜像的。
+            let u = 1 - Float(i) / Float(segments)
+            let c = cos(a), s = sin(a)
+            // 法线朝外，所以侧边映出来的是硬币四周的环境
+            positions.append([radius * c, radius * s, half])
+            positions.append([radius * c, radius * s, -half])
+            normals.append([c, s, 0])
+            normals.append([c, s, 0])
+            uvs.append([u, 0])
+            uvs.append([u, 1])
+        }
+
+        var indices: [UInt32] = []
+        for i in 0..<segments {
+            let a = UInt32(i * 2), b = a + 1, c = a + 2, d = a + 3
+            // 绕序要让三角形正面朝外，否则整圈会被背面剔除掉、什么都看不见
+            indices += [a, b, c, b, d, c]
+        }
+
+        var descriptor = MeshDescriptor(name: "coinEdge")
+        descriptor.positions = MeshBuffer(positions)
+        descriptor.normals = MeshBuffer(normals)
+        descriptor.textureCoordinates = MeshBuffer(uvs)
+        descriptor.primitives = .triangles(indices)
+
+        return (try? MeshResource.generate(from: [descriptor]))
+            ?? .generateCylinder(height: thickness, radius: radius)
     }
 
     /// 带图案的金属面。
@@ -764,11 +822,39 @@ struct CoinSceneView: View {
     }
 
     /// 侧边：没有图案的抛光银
-    private func edgeMaterial() -> RealityKit.Material {
+    /// 饼身：藏在三张贴图底下的那块实心金属。
+    /// 正反面和侧边都是"贴"在它外面一丁点的，所以它几乎看不见，
+    /// 存在的意义是从任何角度看过去硬币都是实的，不会漏出里面。
+    private func bodyMaterial() -> RealityKit.Material {
         var material = PhysicallyBasedMaterial()
-        material.baseColor = .init(tint: UIColor(white: 0.88, alpha: 1))
+        material.baseColor = .init(tint: UIColor(white: 0.80, alpha: 1))
         material.metallic = 1.0
-        material.roughness = 0.12
+        material.roughness = 0.2
+        return material
+    }
+
+    /// 侧边：滚花与刻字。
+    ///
+    /// ★ 对比度要低。★ 侧边是配角，它的任务是让硬币在翻滚时边缘有细碎的光在走，
+    ///   证明这是一块有厚度的金属，而不是两张纸背靠背。做亮了就会抢正反面的戏。
+    ///
+    /// 所以起伏几乎全交给法线图（只改反光的方向），彩色贴图基本是平的一片银；
+    /// 粗糙度也比正反面高一点，滚花上的光是一片细碎的微光，不是一排小镜子。
+    private func edgeMaterial(textureNamed name: String) -> RealityKit.Material {
+        var material = PhysicallyBasedMaterial()
+        material.metallic = 1.0
+        material.roughness = 0.17
+
+        if let color = try? TextureResource.load(named: name) {
+            material.baseColor = .init(tint: UIColor(white: 0.97, alpha: 1),
+                                       texture: .init(color))
+        } else {
+            material.baseColor = .init(tint: UIColor(white: 0.88, alpha: 1))
+        }
+        if let bump = try? TextureResource.load(named: name + "_normal",
+                                                options: .init(semantic: .normal)) {
+            material.normal = .init(texture: .init(bump))
+        }
         return material
     }
 

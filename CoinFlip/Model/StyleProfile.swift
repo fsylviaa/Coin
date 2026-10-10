@@ -17,6 +17,8 @@ struct StyleProfile {
 
     /// 月面贴图的文件名（不带扩展名）
     let textureMoon: String
+    /// 侧边的滚花与刻字贴图（不含 _normal 后缀）
+    let textureEdge: String
 
     /// 抛起时那一声的文件名（不带扩展名）。余韵较长，一直响到硬币升上去。
     let tossSound: String
@@ -45,6 +47,7 @@ extension StyleProfile {
         id: "silver",
         textureSun: "sun_silver",
         textureMoon: "moon_silver",
+        textureEdge: "edge_silver",
         tossSound: "toss_silver",
         landSound: "land_silver",
         bounciness: 0.055,

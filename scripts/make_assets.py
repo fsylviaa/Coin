@@ -49,6 +49,36 @@ R_FIELD = 0.706             # 同心细纹底的外沿
 MOTIF_RING_ERASE = 1.0      # 凸起上的同心纹擦掉多少（1 全擦净，0.5 只减淡）
 MOTIF_EDGE_BLUR = 5.0       # 凸起边缘擦出多软的过渡，避免留下生硬的分界线
 
+# ── 侧边 ──
+# 真币的侧边有一圈细密的滚花（防止有人刮下边上的银），讲究的还会刻一圈字。
+# 参考用户给的实物照片：滚花很细、明暗很淡，字就压在滚花上面，同一个色调。
+EDGE_W, EDGE_H = 4096, 128      # 展开成一条长带。宽高比接近真实的周长比厚度
+EDGE_REEDS = 170                # 滚花多少道
+EDGE_RELIEF = 48                # 滚花凸起多少。★ 压低它 ★ 侧边不该抢正反面的视线
+EDGE_LETTER = 150               # 刻字**凹进去**多少（内凹，不是凸起）
+EDGE_AO = 46                    # 凹槽里烘多深的暗。见 make_edge 里的说明
+
+# 侧边刻字。两句都是对这枚硬币的注脚：
+#   ALEA IACTA EST   骰子已经掷下
+#   TERTIA VIA MANET 仍有第三条路  ← 彩蛋
+# 第二句说的就是"边缘立币"那个极低概率的第三种答案。
+# 它被刻在**侧边**上——答案出现在哪儿，提示就写在哪儿。
+# 绕一圈两句各出现两遍，词与词之间只用空格，不加分隔点。
+#
+# ALEA IACTA EST   骰子已经掷下。恺撒渡卢比孔河。
+#   严格说这是后世通行的语序；苏维托尼乌斯原文作 IACTA ALEA EST。
+#   这里用通行版，因为认得的人多得多——彩蛋是给认得的人准备的。
+# TERTIA VIA MANET 仍有第三条路。← 彩蛋，指"边缘立币"那个第三种答案。
+#   manēre 兼有"留存"和"等待"两义，所以它也读作"第三条路在等着"。
+EDGE_PHRASES = ["ALEA IACTA EST", "TERTIA VIA MANET"]
+
+# 侧边的字只能在某一面朝上时读得正。所以两句**分别朝向两面**：
+#   日面朝上  → 读得出 ALEA IACTA EST（骰子已经掷下）
+#   月面朝上  → 读得出 TERTIA VIA MANET（仍有第三条路）
+# 每一面都有属于自己的那一句，翻到哪面就读哪句。
+# 这里列出来的句子在贴图里转 180° 画。
+EDGE_FLIPPED = {"ALEA IACTA EST"}
+
 SUN_TEXT = "SOL · INVICTUS · LUX · AETERNA · MMXXVI"
 MOON_TEXT = "LUNA · REGINA · SILENTII · NOCTIS · MMXXVI"
 
@@ -168,14 +198,15 @@ def moon_motif(major: Image.Image, rings: Image.Image,
     cd = ImageDraw.Draw(crescent)
     r = 0.470
     cd.ellipse([c - c * r, c - c * r, c + c * r, c + c * r], fill=225)
-    cut_r, cx, cy = r * 0.880, c + c * r * 0.395, c - c * r * 0.120
+    # 开口朝左。下面的环形坑和星星也跟着翻到对称的位置，构图才不散。
+    cut_r, cx, cy = r * 0.880, c - c * r * 0.395, c - c * r * 0.120
     cd.ellipse([cx - c * cut_r, cy - c * cut_r, cx + c * cut_r, cy + c * cut_r], fill=0)
 
     # 月面上几处环形坑，做成凹进去的
     hd = ImageDraw.Draw(crescent)
-    for ox, oy, orr in [(-0.250, -0.195, 0.052), (-0.330, 0.090, 0.038),
-                        (-0.175, 0.265, 0.044), (-0.085, -0.300, 0.030),
-                        (-0.300, -0.030, 0.024), (-0.130, 0.055, 0.020)]:
+    for ox, oy, orr in [(0.250, -0.195, 0.052), (0.330, 0.090, 0.038),
+                        (0.175, 0.265, 0.044), (0.085, -0.300, 0.030),
+                        (0.300, -0.030, 0.024), (0.130, 0.055, 0.020)]:
         x, y = c + c * ox, c + c * oy
         s = c * orr
         hd.ellipse([x - s, y - s, x + s, y + s], fill=150)
@@ -193,9 +224,9 @@ def moon_motif(major: Image.Image, rings: Image.Image,
     # 星星：四角星，大小不一地散在月牙开口那侧
     d = ImageDraw.Draw(major)
     md = ImageDraw.Draw(mask)
-    for sx, sy, ss, v in [(0.300, -0.330, 0.042, 240), (0.455, -0.090, 0.028, 225),
-                          (0.250, 0.230, 0.034, 232), (0.420, 0.330, 0.020, 215),
-                          (0.115, -0.470, 0.022, 220), (0.520, 0.120, 0.016, 205)]:
+    for sx, sy, ss, v in [(-0.300, -0.330, 0.042, 240), (-0.455, -0.090, 0.028, 225),
+                          (-0.250, 0.230, 0.034, 232), (-0.420, 0.330, 0.020, 215),
+                          (-0.115, -0.470, 0.022, 220), (-0.520, 0.120, 0.016, 205)]:
         x, y, s = c + c * sx, c + c * sy, c * ss
         star = [(x, y - s), (x + s * 0.22, y - s * 0.22),
                    (x + s, y), (x + s * 0.22, y + s * 0.22),
@@ -339,6 +370,116 @@ def circular_alpha() -> Image.Image:
     return mask.resize((SIZE, SIZE), Image.LANCZOS)
 
 
+# ─────────────────────────── 侧边 ───────────────────────────
+
+def make_edge():
+    """
+    侧边的滚花与内凹刻字。
+
+    做成一条长带：横向绕硬币一圈（接缝处必须对得上），纵向是硬币的厚度。
+
+    三件事值得写下来：
+
+    ① **刻字是凹进去的，不是凸出来的。**
+       真币的边字就是压进去的。
+
+    ② **凹槽里的暗是烘进彩色贴图的，不是算出来的。**
+       真实的内凹之所以好认，靠的是光进不去、沟里有阴影。但我们只有法线贴图，
+       它只改反光方向，不做遮挡计算——光翻个正负号，看着只是"打光反了"，
+       字并不会更清楚。所以这里按深度直接往彩色贴图里画一道淡影，
+       把渲染算不出来的那部分补上。这才是内凹真正兑现的地方。
+
+    ③ **刻字那几段要把滚花清掉。**
+       这是清晰度最大的一项。字压在竖条纹上，一个字母要和七八道竖线抢地方，
+       边界全被切碎。真币上刻字的那一段本来就是光面。
+
+    ★ 整体对比度仍然压着。★ 侧边是配角：它的任务是让硬币翻滚时边缘有细碎的
+      光在走，证明这是一块有厚度的金属，而不是两张纸背靠背。
+      觉得它抢了正反面的戏，调小 EDGE_RELIEF 和 EDGE_AO。
+    """
+    W, H = EDGE_W, EDGE_H
+
+    # ── 滚花
+    reeds = Image.new("L", (W, H), 0)
+    rd = ImageDraw.Draw(reeds)
+    pad = int(H * 0.19)
+    step = W / EDGE_REEDS
+    bar = max(2, int(step * 0.34))
+    for i in range(EDGE_REEDS):
+        x = int(i * step)
+        rd.rectangle([x, pad, x + bar, H - pad], fill=255)
+
+    # ── 刻字，以及字底下要清掉滚花的那几段光面
+    text_img = Image.new("L", (W, H), 0)
+    panel = Image.new("L", (W, H), 0)
+    td, pd = ImageDraw.Draw(text_img), ImageDraw.Draw(panel)
+    try:
+        font = ImageFont.truetype(FONT_PATH, int(H * 0.38))
+    except OSError:
+        font = ImageFont.load_default()
+
+    slots = len(EDGE_PHRASES) * 2
+    gap = W / slots
+    for k in range(slots):
+        phrase = EDGE_PHRASES[k % len(EDGE_PHRASES)]
+        centre = gap * (k + 0.5)
+        width = d_textwidth(td, phrase, font)
+
+        # 每句先画在自己的一小块上，需要翻转的转 180° 再贴回长带。
+        # 不能直接在长带上转——那会把整条带子连同别的句子一起转掉。
+        tile_w = int(width + H * 1.2)
+        tile = Image.new("L", (tile_w, H), 0)
+        ImageDraw.Draw(tile).text((tile_w / 2, H / 2), phrase,
+                                  font=font, fill=255, anchor="mm")
+        if phrase in EDGE_FLIPPED:
+            tile = tile.rotate(180)
+        text_img.paste(tile, (int(centre - tile_w / 2), 0), tile)
+
+        half = width / 2 + H * 0.55
+        pd.rectangle([centre - half, 0, centre + half, H], fill=255)
+
+    # 光面的边缘糊开，滚花是渐隐进去的，不会留下一道生硬的界
+    panel = panel.filter(ImageFilter.GaussianBlur(H * 0.16))
+
+    # ── 合成高度：滚花凸起（正），刻字凹陷（负）
+    reed_h = np.array(reeds, np.float32) / 255
+    keep = 1 - np.array(panel, np.float32) / 255
+    text_h = np.array(text_img.filter(ImageFilter.GaussianBlur(1.1)), np.float32) / 255
+
+    h = EDGE_RELIEF * reed_h * keep - EDGE_LETTER * text_h
+    h = np.array(Image.fromarray((h + 128).clip(0, 255).astype(np.uint8), "L")
+                 .filter(ImageFilter.GaussianBlur(1.3)), np.float32) - 128
+    h /= 255
+
+    # ── 彩色图：平的一片银 + 极轻的明暗 + 凹槽里烘的那道暗
+    gy, gx = np.gradient(h)
+    shade = np.clip((-gx - gy) * 300, -16, 16)
+    occlusion = np.clip(-h, 0, None) / (EDGE_LETTER / 255) * EDGE_AO
+
+    silver = np.array([206, 210, 218], dtype=np.float32)
+    px = silver[None, None, :] + shade[:, :, None] - occlusion[:, :, None]
+    Image.fromarray(np.clip(px, 0, 255).astype(np.uint8), "RGB").save(
+        OUT / "edge_silver.png", "PNG", optimize=True)
+
+    # ── 法线图：起伏靠它。硬币一转，滚花和刻字上的光就跟着走。
+    strength = 30.0
+    nx, ny, nz = -gx * strength, gy * strength, np.ones_like(gx)
+    norm = np.sqrt(nx * nx + ny * ny + nz * nz)
+    rgb = np.stack([nx / norm, ny / norm, nz / norm], axis=-1) * 0.5 + 0.5
+    Image.fromarray((rgb * 255).astype(np.uint8), "RGB").save(
+        OUT / "edge_silver_normal.png", "PNG", optimize=True)
+
+    for n in ("edge_silver", "edge_silver_normal"):
+        f = OUT / f"{n}.png"
+        print(f"  {f.name}  {W}x{H}  {f.stat().st_size // 1024} KB")
+    print(f"  绕一圈内凹刻字：{' ／ '.join(EDGE_PHRASES)}，各两遍，字底下清了滚花")
+
+
+def d_textwidth(draw, text, font) -> float:
+    """这个字串画出来有多宽"""
+    return draw.textlength(text, font=font)
+
+
 # ─────────────────────────── 环境贴图 ───────────────────────────
 
 def make_environment():
@@ -383,8 +524,10 @@ def make_environment():
     box(78, 30, 86, 70, 40)
     box(150, -8, 100, 60, 46)
 
-    # 地面：暗，但留一点
-    box(0, -90, 360, 66, 52)
+    # 地面：暗，但留一点。
+    # ★ 不能太暗。★ 硬币下半边的侧棱映的就是这一块；它一黑，
+    #   下缘在黑背景上就整个没了，快速翻滚时看着像硬币缺了一块。
+    box(0, -90, 360, 92, 86)
 
     # 只稍微糊一下。糊过头，亮暗之间会填满中间调，
     # 币面就从"黑白分明"变成"一片灰"——这正是上一版发灰的原因。
@@ -442,8 +585,10 @@ def make_ground_and_shadow():
 
 # 图标尺寸（像素）。iOS 要一张 1024 的，其余由系统缩。
 ICON_SIZE = 1024
-# 硬币占图标边长的比例。别顶满——iOS 会切圆角，顶满会被啃掉边
-ICON_COIN = 0.82
+# 硬币占图标边长的比例。
+# 不能大：顶满之后小尺寸下只剩"一整个白圆"，看不出是硬币。
+# 留足黑底，圆形的轮廓才读得出来，iOS 切圆角也不会啃到。
+ICON_COIN = 0.615
 
 
 def make_icon():
@@ -582,6 +727,8 @@ if __name__ == "__main__":
             path = OUT / f"{name}{suffix}.png"
             img.save(path, "PNG", optimize=True)
             print(f"  {path.name}  {img.size[0]}x{img.size[1]}  {path.stat().st_size // 1024} KB")
+    print("生成侧边：")
+    make_edge()
     print("生成环境贴图：")
     make_environment()
     print("生成地面与阴影：")

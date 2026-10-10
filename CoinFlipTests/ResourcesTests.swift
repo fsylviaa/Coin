@@ -22,7 +22,7 @@ final class ResourcesTests: XCTestCase {
             ?? Bundle(for: ResourcesTests.self).url(forResource: name, withExtension: ext)
     }
 
-    /// 三个素材文件都能找到，而且不是空文件
+    /// 每个素材文件都能找到，而且不是空文件
     func testResourcesExist() {
         let style = StyleProfile.silver
         let items: [(String, String)] = [
@@ -30,6 +30,8 @@ final class ResourcesTests: XCTestCase {
             (style.textureMoon, "png"),
             (style.textureSun + "_normal", "png"),
             (style.textureMoon + "_normal", "png"),
+            (style.textureEdge, "png"),
+            (style.textureEdge + "_normal", "png"),
             ("studio_env", "png"),
             ("ground_fade", "png"),
             ("shadow_soft", "png"),
