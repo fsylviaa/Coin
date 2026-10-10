@@ -39,11 +39,11 @@ enum GroundShadow {
 
     /// 贴地的那一刻，阴影缩到多小、多浓
     static let restScale: Float = 0.56
-    static let restOpacity: Float = 0.78
+    static let restOpacity: Float = 0.86
 
     /// 升到最高时，阴影放到多大、多淡
     static let highScale: Float = 1.70
-    static let highOpacity: Float = 0.13
+    static let highOpacity: Float = 0.32
 
     /// 硬币侧着时阴影淡成什么样。
     ///
@@ -53,7 +53,8 @@ enum GroundShadow {
     /// 它同时解决一个麻烦：硬币只有在**侧着**的时候下缘才会穿过这张平面，
     /// 而那正是阴影被减得最淡的时候。躲不开的相交，刚好发生在影响最小的时刻。
     /// 数字越大减得越狠（1.0 是严格按投影面积算）。
-    static let tiltFade: Float = 1.8
+    /// 调浓阴影之后这里跟着加大，把"侧着时压暗硬币"那部分抵回去。
+    static let tiltFade: Float = 2.2
 
     /// 地面和阴影要沉到硬币下方，正好托住它的底面
     static let groundY: Float = -CoinScene.coinThickness / 2
