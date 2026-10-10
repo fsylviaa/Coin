@@ -55,3 +55,24 @@ struct FlipPlan: Equatable {
         let strength: Double
     }
 }
+
+extension FlipPlan {
+
+    /// 精简版的时间表：只保留"抛起"和"落地"两下，中间那串磕碰全去掉。
+    ///
+    /// 给"减少动态效果"模式用。那个模式下硬币不飞不转，画面 0.75 秒就结束了，
+    /// 声音却还要响两秒半——结果早就摆在眼前，耳朵里还在落地，很怪。
+    ///
+    /// ★ 结果相关的三项原样带过来。★ result 自不必说；startFace 和 halfTurns
+    ///   也不能动——一致性测试是靠这两项反推最终朝向的，动了就对不上了。
+    func simplified(landAt: Double, endAt: Double) -> FlipPlan {
+        FlipPlan(result: result,
+                 startFace: startFace,
+                 height: height,
+                 halfTurns: halfTurns,
+                 landTime: landAt,
+                 bounces: [],
+                 contacts: [Contact(time: landAt, strength: 1)],
+                 endTime: endAt)
+    }
+}

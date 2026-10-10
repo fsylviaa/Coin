@@ -438,6 +438,54 @@ def make_ground_and_shadow():
                peak=1.0, falloff=0.36, power=1.7)
 
 
+# ─────────────────────────── App 图标 ───────────────────────────
+
+# 图标尺寸（像素）。iOS 要一张 1024 的，其余由系统缩。
+ICON_SIZE = 1024
+# 硬币占图标边长的比例。别顶满——iOS 会切圆角，顶满会被啃掉边
+ICON_COIN = 0.82
+
+
+def make_icon():
+    """
+    App 图标：月面特写。
+
+    为什么用这一面的特写、而不是立起来的币或者日月对半：
+    图标在桌面上只有 60 点左右，**小尺寸下认不认得出**才是唯一标准。
+    一枚带纹饰的圆币缩到 60 点还看得出是硬币，外圈的拉丁文糊成一圈点纹，
+    反而更像真币；立着的币缩小后只剩一个窄椭圆，认不出来。
+
+    ⚠️ 图标**不能有透明**，否则 App Store 会退回。所以这里铺满不透明底色。
+    """
+    size = ICON_SIZE
+    c = size / 2
+
+    # 底：近黑，中心一点极淡的光晕，和 App 打开后的画面是一路的
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
+    r = np.sqrt((xx - c) ** 2 + (yy - c) ** 2) / c
+    glow = np.exp(-((r / 0.66) ** 1.8)) * 24
+    base = np.stack([glow + 9, glow + 9, glow + 12], axis=-1)
+    img = Image.fromarray(np.clip(base, 0, 255).astype(np.uint8), "RGB")
+
+    coin = Image.open(OUT / "moon_silver.png").convert("RGBA")
+    d = int(size * ICON_COIN)
+    coin = coin.resize((d, d), Image.LANCZOS)
+
+    # 币底下一圈接触阴影，让它不像贴上去的一张纸
+    sh = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(sh).ellipse([c - d * 0.47, c - d * 0.44,
+                                c + d * 0.47, c + d * 0.50], fill=130)
+    img.paste(Image.new("RGB", (size, size), (0, 0, 0)), (0, 0),
+              sh.filter(ImageFilter.GaussianBlur(size * 0.03)))
+
+    img.paste(coin, ((size - d) // 2, (size - d) // 2), coin)
+
+    path = OUT.parent / "Assets.xcassets" / "AppIcon.appiconset" / "icon_1024.png"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(path, "PNG", optimize=True)
+    print(f"  {path.name}  {size}x{size}  {path.stat().st_size // 1024} KB")
+
+
 # ─────────────────────────── 音效 ───────────────────────────
 
 def metal_ring(partials, dur, fast, slow, slow_share, noise=0.0, grain=0.0, seed=11):
@@ -538,6 +586,8 @@ if __name__ == "__main__":
     make_environment()
     print("生成地面与阴影：")
     make_ground_and_shadow()
+    print("生成 App 图标：")
+    make_icon()
     print("生成音效：")
     make_sounds()
     print("完成。")

@@ -13,6 +13,7 @@
 
 import SwiftUI
 import RealityKit
+import UIKit
 
 /// 场景的尺寸与节奏设定。T23 调手感时主要改这里。
 ///
@@ -67,6 +68,16 @@ enum CoinScene {
     static let dragFollowSeconds: Double = 0.045
     /// 松手但没甩出去时，落回平面要多久
     static let dragReturnSeconds: Double = 0.22
+
+    // 减少动态效果（系统辅助功能，前庭敏感的人会开）。
+    //
+    // 开着的时候：**不飞、不翻、不推镜头、镜头也不游移**。
+    // 上划之后画面短暂暗下来，再亮起时结果已经摆在那里。
+    // 震动和声音保留——它们不引起眩晕，而且是这个 App 重要的一半。
+    /// 从上划到结果显出来，一共多久
+    static let reduceMotionSeconds: Double = 0.75
+    /// 第几秒换面。这一刻画面正好全黑，所以切换看不见
+    static let reduceMotionSwap: Double = 0.30
 
     // 横拨自旋：停稳后横着一拨，硬币原地转几圈再缓缓停下。
     //
@@ -155,6 +166,9 @@ final class CoinSceneState {
     var dragUp: CGFloat = 0
     /// 硬币当前被提起多高。它平滑地追 dragUp，所以松手会自己落回去。
     var lift: Float = 0
+    /// 硬币**最低点**离平面多高。阴影看的是它，不是圆心——
+    /// 歪着的硬币圆心被顶得很高，但它明明还贴在地上。
+    var contactHeight: Float = 0
     /// 脱手那一刻硬币已经被提到多高。飞行时要从这个高度接上，不能跳。
     var launchLift: Float = 0
 
@@ -312,6 +326,27 @@ struct CoinSceneView: View {
         updateShadow()
     }
 
+    /// 硬币歪着的时候，圆心被边缘顶起多高。
+    ///
+    /// 一枚半径 R、半厚 h 的圆饼歪 θ 度时，最低点在圆心下方
+    /// R·sinθ + h·cosθ 处。躺平时这个值正好是 h，也就是现在的摆法，
+    /// 所以减掉 h，得到的就是"因为歪着而多出来的那一截"。
+    ///
+    /// 真硬币躺下的过程里圆心本来就是一路降下来的，所以这不只是修 bug，
+    /// 看着也更像那么回事。
+    static func pivotLift(tiltDegrees: Double) -> Float {
+        guard tiltDegrees > 0 else { return 0 }
+        let a = Float(tiltDegrees * .pi / 180)
+        let h = CoinScene.coinThickness / 2
+        return CoinScene.coinRadius * sin(a) + h * cos(a) - h
+    }
+
+    /// 系统的"减少动态效果"开着没有。
+    ///
+    /// 每帧读一次。它是一个缓存好的系统设置，很便宜；
+    /// 而且用户可能在 App 开着的时候去设置里改，所以不能只在启动时读一次。
+    static var reduceMotion: Bool { UIAccessibility.isReduceMotionEnabled }
+
     /// 让阴影跟上硬币此刻的位置和高度。
     ///
     /// 放在摆完硬币之后，所以读到的永远是这一帧的真实位置——
@@ -322,9 +357,11 @@ struct CoinSceneView: View {
     private func updateShadow() {
         guard let shadow = state.shadow, let coin = state.coin else { return }
 
-        let position = UIAccessibility.isReduceMotionEnabled
+        // 用最低点而不是圆心：歪着的硬币圆心被顶得很高，
+        // 但它还贴在地上，阴影这时候不该散开
+        let position = Self.reduceMotion
             ? SIMD3<Float>(coin.position.x, 0, coin.position.z)
-            : coin.position
+            : SIMD3<Float>(coin.position.x, state.contactHeight, coin.position.z)
         state.shadowStep = GroundShadow.update(shadow,
                                                coinPosition: position,
                                                lastStep: state.shadowStep)
@@ -451,6 +488,8 @@ struct CoinSceneView: View {
         guard let camera = state.camera else { return }
 
         let target: Double = {
+            // 减少动态效果：镜头始终不动
+            if Self.reduceMotion { return 0 }
             // 手指一按住往上带，就先退回常态景别，给接下来的抛掷腾出空间
             if state.dragUp > 10 { return 0 }
             if case .resting = state.phase { return 1 }
@@ -474,8 +513,9 @@ struct CoinSceneView: View {
         let lookUp = lerp(CoinScene.lookUpFar, CoinScene.lookUpNear, z)
         var yaw: Float = 0
 
-        // 等待时让镜头极缓慢地游移，画面不至于死板
-        if case .waiting = state.phase {
+        // 等待时让镜头极缓慢地游移，画面不至于死板。
+        // 减少动态效果下这一项也要停——持续不断的缓慢移动正是最容易引起不适的那种
+        if case .waiting = state.phase, !Self.reduceMotion {
             let e = now.timeIntervalSince(state.idleSince)
             yaw = CoinScene.driftYaw * Float(sin(e * 2 * .pi / CoinScene.driftYawPeriod))
             elevation += CoinScene.driftElevation
@@ -505,6 +545,20 @@ struct CoinSceneView: View {
         case .flipping(let plan):
             guard let startedAt = state.startedAt else { return }
             let t = now.timeIntervalSince(startedAt)
+
+            // 减少动态效果：硬币原地不动，到点直接换成结果那一面。
+            // 换面这一下由外层的黑幕盖住，所以看不到突兀的跳变。
+            if Self.reduceMotion {
+                applyLift(to: coin,
+                          face: t < CoinScene.reduceMotionSwap ? plan.startFace : plan.result)
+                if t >= CoinScene.reduceMotionSeconds, !state.finishReported {
+                    state.finishReported = true
+                    let notify = state.onFinished
+                    DispatchQueue.main.async { notify() }
+                }
+                return
+            }
+
             let pose = FlipAnimator.pose(at: t, plan: plan,
                                          heightScale: Double(CoinScene.heightScale))
 
@@ -514,7 +568,14 @@ struct CoinSceneView: View {
             let carry = plan.landTime > 0
                 ? state.launchLift * Float(max(0, 1 - t / plan.landTime))
                 : 0
-            coin.position = [0, Float(pose.height) + carry, 0]
+
+            // ★ 歪着的硬币，圆心是被边缘顶起来的。★
+            //   不算这一下，圆心按 0 摆，下半边就沉到地面那张圆片以下了——
+            //   地面会在币面上切出一道笔直的边。这是模型本身的错，
+            //   不是渲染的错，所以修在这里，而不是去跟渲染顺序较劲。
+            let contact = Float(pose.height) + carry
+            state.contactHeight = contact
+            coin.position = [0, contact + Self.pivotLift(tiltDegrees: pose.tiltDegrees), 0]
 
             if pose.isFinished {
                 // 停稳时摆成干净的躺平姿态，不留累加的零头。
@@ -550,6 +611,7 @@ struct CoinSceneView: View {
     /// 纯粹平移上升看着像"浮空"，加一点倾斜才有被捏住的实感。
     private func applyLift(to coin: Entity, face: CoinFace) {
         coin.position = [0, state.lift, 0]
+        state.contactHeight = state.lift
 
         let ratio = CoinScene.maxDragLift > 0 ? state.lift / CoinScene.maxDragLift : 0
         let tilt = CoinScene.dragTilt * ratio * .pi / 180

@@ -43,6 +43,10 @@ struct RootView: View {
     /// 刚刚甩出去的那一拨
     @State private var spinImpulse: SpinImpulse?
 
+    /// 盖在硬币上的黑幕。减少动态效果模式下用它遮住换面那一下，
+    /// 0 是完全透明。它只做淡入淡出，不缩放不移动——这正是那个模式要的。
+    @State private var veil: Double = 0
+
     /// 最近一次有效上划的速度，显示在调试信息条上
     @State private var lastSpeed: Double = 0
 
@@ -102,8 +106,19 @@ struct RootView: View {
                     if let plan = controller.requestFlip(speed: speed, distance: distance) {
                         let now = Date()
                         flipStartedAt = now
-                        // 把这一次所有的磕碰排进队列，画面和声音照的是同一张表
-                        feedback.schedule(plan, startedAt: now)
+
+                        if CoinSceneView.reduceMotion {
+                            // 不飞不转：画面暗下来，再亮起时结果已经在那里。
+                            // 声音也用精简版，否则画面早就结束了耳朵里还在落地。
+                            feedback.schedule(
+                                plan.simplified(landAt: CoinScene.reduceMotionSwap,
+                                                endAt: CoinScene.reduceMotionSeconds),
+                                startedAt: now)
+                            revealWithoutMotion()
+                        } else {
+                            // 把这一次所有的磕碰排进队列，画面和声音照的是同一张表
+                            feedback.schedule(plan, startedAt: now)
+                        }
                     }
                     return
                 }
@@ -120,6 +135,12 @@ struct RootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea()
 
+            // 黑幕盖住硬币，但不盖底部那行字——那行字该一直看得见
+            Color.black
+                .ignoresSafeArea()
+                .opacity(veil)
+                .allowsHitTesting(false)
+
             VStack {
                 Spacer()
                 StatusLine(phase: controller.phase, speed: lastSpeed)
@@ -134,6 +155,20 @@ struct RootView: View {
 }
 
 extension RootView {
+
+    /// 减少动态效果模式下的揭晓：画面暗下去，再亮起来。
+    ///
+    /// 全程只有透明度在变，没有任何缩放、旋转或位移——
+    /// 这正是前庭敏感的人需要的。换面那一下发生在全黑的时候，所以看不见跳变。
+    private func revealWithoutMotion() {
+        let swap = CoinScene.reduceMotionSwap
+        let total = CoinScene.reduceMotionSeconds
+
+        withAnimation(.easeIn(duration: swap)) { veil = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + swap) {
+            withAnimation(.easeOut(duration: total - swap)) { veil = 0 }
+        }
+    }
 
     /// 切后台、被来电打断时的处理。对应任务 T22。
     ///
@@ -154,6 +189,9 @@ extension RootView {
             controller.interrupt()
             flipStartedAt = nil
             dragUp = 0
+            dragSide = 0
+            dragging = false
+            veil = 0            // 别把黑幕留在屏幕上
 
         @unknown default:
             break

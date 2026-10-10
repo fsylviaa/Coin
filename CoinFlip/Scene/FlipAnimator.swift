@@ -24,6 +24,11 @@ enum FlipAnimator {
         let height: Double
         /// 绕横轴累计翻转了多少度。奇数个 180° 就是换了一面。
         let degrees: Double
+        /// 离躺平还差多少度（0 就是完全躺平了）。
+        ///
+        /// 画面要用它把圆心顶起来：歪着的硬币支点在边缘，圆心是悬空的。
+        /// 不算这一下，硬币会沉到地面以下，地面就会在币面上切一刀。
+        let tiltDegrees: Double
         /// 绕竖直轴转了多少度——落地后在平面上打转的方位。
         /// 它不改变朝上的是哪一面，只是让摇摆的方向绕着走。
         let wobbleDegrees: Double
@@ -41,12 +46,13 @@ enum FlipAnimator {
         let total = Double(plan.halfTurns) * 180
 
         if t >= plan.endTime {
-            return Pose(height: 0, degrees: total,
+            return Pose(height: 0, degrees: total, tiltDegrees: 0,
                         wobbleDegrees: wobbleEndDegrees, isFinished: true)
         }
 
         return Pose(height: height(at: t, plan: plan) * heightScale,
                     degrees: degrees(at: t, plan: plan),
+                    tiltDegrees: tilt(at: t, plan: plan),
                     wobbleDegrees: wobble(at: t, plan: plan),
                     isFinished: false)
     }
@@ -91,20 +97,45 @@ enum FlipAnimator {
     /// 两段在最高点处转速是接续上的，不会有突然变速的突兀感。
     /// 想让上抛更活泼就加圈数，想让下落更从容就加减速程度，互不干扰。
     ///
-    /// 另外故意少转一点点：落地那一刻硬币还歪着 26 度，
-    /// 因为真硬币是边缘先着地的。剩下这 26 度在摇摆中慢慢收完。
+    /// 另外故意少转一点点：落地那一刻硬币还歪着一个角度，
+    /// 因为真硬币是边缘先着地的。剩下这点角度在摇摆中慢慢收完。
+    ///
+    /// 收的节奏是**故意往后拖**的：歪着的时候币面侧对镜头，读不出图案，
+    /// 要等镜头抬起来推近，答案才一点点显出来。揭晓的那一口气就在这儿。
     private static func degrees(at t: Double, plan: FlipPlan) -> Double {
         let total = Double(plan.halfTurns) * 180
-        let tilt = min(FlipPlanner.landingTilt, total)
+        let landing = min(FlipPlanner.landingTilt, total)
 
         if t <= plan.landTime {
             let progress = plan.landTime > 0 ? t / plan.landTime : 1
-            return (total - tilt) * spinProgress(progress)
+            return (total - landing) * spinProgress(progress)
+        }
+        return total - tilt(at: t, plan: plan)
+    }
+
+    /// 第 t 秒时，硬币离躺平还差多少度。
+    ///
+    /// 落地之后它从落地倾角一路收到 0；落地之前只在**最后一小段**里悄悄长起来，
+    /// 到落地那一刻正好接上。
+    ///
+    /// 为什么飞行段要这样处理：画面会按这个角度把圆心顶起来。
+    /// 要是整个飞行过程都顶，最高点会被抬高两成，硬币就飞出屏幕了——
+    /// 用六次方意味着飞到九成路程时才抬了不到一个点，肉眼完全看不出，
+    /// 落地那一刻却已经严丝合缝地对上了。
+    static func tilt(at t: Double, plan: FlipPlan) -> Double {
+        let total = Double(plan.halfTurns) * 180
+        let landing = min(FlipPlanner.landingTilt, total)
+
+        if t >= plan.endTime { return 0 }
+
+        if t <= plan.landTime {
+            let progress = plan.landTime > 0 ? t / plan.landTime : 1
+            return landing * pow(progress, 6)
         }
 
+        // 先一直歪着，最后才躺平；越接近躺平收得越慢，不会拍一下砸平
         let p = settleProgress(at: t, plan: plan)
-        // 越接近躺平收得越慢
-        return total - tilt * pow(1 - p, 1.6)
+        return landing * pow(1 - pow(p, FlipPlanner.flattenDelay), 1.6)
     }
 
     /// 飞行走到 progress（0 到 1）时，已经转完了全部的百分之多少。

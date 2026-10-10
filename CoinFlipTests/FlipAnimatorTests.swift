@@ -148,6 +148,102 @@ final class FlipAnimatorTests: XCTestCase {
                        "打转的总圈数不对")
     }
 
+    /// 揭晓要有一口气：摇停到一半时，硬币还该明显歪着，让人读不清图案。
+    ///
+    /// 这条是设计意图，不是物理。落地就躺平的话，镜头推近只是把一个
+    /// 早就知道的答案放大，没有"揭晓"可言。
+    func testResultStaysHardToReadUntilLate() {
+        let plan = makePlan()
+        let total = Double(plan.halfTurns) * 180
+
+        func tilt(at p: Double) -> Double {
+            let t = plan.landTime + (plan.endTime - plan.landTime) * p
+            return abs(total - FlipAnimator.pose(at: t, plan: plan, heightScale: scale).degrees)
+        }
+
+        XCTAssertGreaterThan(tilt(at: 0.5), 15,
+                             "摇停过半就几乎躺平了，推近之前答案已经看得一清二楚")
+        XCTAssertGreaterThan(tilt(at: 0.3), 25,
+                             "刚落地没多久就躺平了")
+        XCTAssertLessThan(tilt(at: 0.95), 3,
+                          "快停稳了还歪着这么多，最后会拍一下砸平")
+    }
+
+    /// 收平的过程必须是一路变缓的，不能在最后猛地拍平
+    func testFlattenNeverSnaps() {
+        let plan = makePlan()
+        let total = Double(plan.halfTurns) * 180
+        let settle = plan.endTime - plan.landTime
+        let step = settle / 80
+
+        func tilt(_ t: Double) -> Double {
+            abs(total - FlipAnimator.pose(at: t, plan: plan, heightScale: scale).degrees)
+        }
+
+        var fastest = 0.0
+        for i in 0..<80 {
+            let a = plan.landTime + settle * Double(i) / 80
+            fastest = max(fastest, abs(tilt(a + step) - tilt(a)) / step)
+        }
+        XCTAssertLessThan(fastest, 120,
+                          "收平最快到了每秒 \(Int(fastest)) 度，看着像被拍平的")
+    }
+
+    /// ★ 硬币不能沉进地面。★
+    ///
+    /// 歪着的硬币支点在边缘，圆心是被顶起来的。按 0 摆的话下半边会沉到
+    /// 地面那张圆片以下，地面就在币面上切出一道笔直的边——真机上出现过两次。
+    /// 这里直接算出最低点，它永远不能低于平面。
+    func testCoinNeverSinksIntoTheGround() {
+        for speed in [400.0, 1500.0, 3000.0] {
+            let plan = makePlan(speed: speed)
+            // ⚠️ 必须用画面真正在用的换算尺度，不能用这个文件里的 scale——
+            //    高度是场景单位，硬币半径也是场景单位，两者得同一把尺子
+            let real = Double(CoinScene.heightScale)
+            for i in 0...400 {
+                let t = plan.endTime * Double(i) / 400
+                let pose = FlipAnimator.pose(at: t, plan: plan, heightScale: real)
+                let centre = pose.height + Double(CoinSceneView.pivotLift(tiltDegrees: pose.tiltDegrees))
+                // 圆心减去"圆心到最低点的距离"，就是最低点
+                let a = pose.tiltDegrees * .pi / 180
+                let half = Double(CoinScene.coinThickness) / 2
+                let lowest = centre - (Double(CoinScene.coinRadius) * sin(a) + half * cos(a))
+
+                XCTAssertGreaterThanOrEqual(
+                    lowest, -half - 1e-4,
+                    "速度 \(Int(speed))、第 \(String(format: "%.2f", t)) 秒时硬币沉进地面了")
+            }
+        }
+    }
+
+    /// 倾角不能跳。落地那一刻飞行段和摇停段必须接得上。
+    func testTiltIsContinuousAtLanding() {
+        let plan = makePlan()
+        let before = FlipAnimator.tilt(at: plan.landTime - 1e-4, plan: plan)
+        let after = FlipAnimator.tilt(at: plan.landTime + 1e-4, plan: plan)
+
+        XCTAssertEqual(before, FlipPlanner.landingTilt, accuracy: 0.05, "落地时倾角不对")
+        XCTAssertEqual(before, after, accuracy: 0.05, "落地那一刻倾角跳了")
+        XCTAssertEqual(FlipAnimator.tilt(at: plan.endTime, plan: plan), 0, accuracy: 1e-9,
+                       "停稳了还歪着")
+    }
+
+    /// 把圆心顶起来这件事不能影响最高点，否则硬币会飞出屏幕
+    func testPivotDoesNotRaiseTheApex() {
+        let plan = makePlan(speed: 4000)
+        let apex = FlipAnimator.pose(at: plan.landTime / 2, plan: plan,
+                                     heightScale: Double(CoinScene.heightScale))
+        let extra = Double(CoinSceneView.pivotLift(tiltDegrees: apex.tiltDegrees))
+
+        XCTAssertLessThan(extra, apex.height * 0.05,
+                          "最高点被抬高了 \(Int(extra / apex.height * 100))%，硬币会飞出屏幕")
+    }
+
+    /// 躺平时不该顶起任何东西——那正是现在的摆法
+    func testFlatCoinIsNotLifted() {
+        XCTAssertEqual(CoinSceneView.pivotLift(tiltDegrees: 0), 0, accuracy: 1e-6)
+    }
+
     /// ★ 停稳那一刻不能跳。★
     ///
     /// 画面在停稳时会把硬币摆成干净的躺平姿态，那个姿态是不带打转的。
