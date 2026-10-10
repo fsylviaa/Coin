@@ -52,8 +52,14 @@ MOTIF_EDGE_BLUR = 5.0       # 凸起边缘擦出多软的过渡，避免留下�
 # ── 侧边 ──
 # 真币的侧边有一圈细密的滚花（防止有人刮下边上的银），讲究的还会刻一圈字。
 # 参考用户给的实物照片：滚花很细、明暗很淡，字就压在滚花上面，同一个色调。
-EDGE_W, EDGE_H = 4096, 128      # 展开成一条长带。宽高比接近真实的周长比厚度
-EDGE_REEDS = 170                # 滚花多少道
+# 展开成一条长带。宽高比接近真实的周长比厚度。
+#
+# ★ 宽度必须能被滚花数整除。★ 原来是 4096 ÷ 170 = 24.094，除不尽，
+#   于是绕一圈首尾相接的地方齿距对不上，整圈正好缺一根齿——
+#   而接缝的位置恰好落在无字区的正中间，一眼就看见。
+#   4080 = 170 × 24，齿距精确 24 像素，首尾严丝合缝。
+EDGE_W, EDGE_H = 4080, 128
+EDGE_REEDS = 170                # 滚花多少道。改它的话 EDGE_W 要跟着改成它的整数倍
 EDGE_RELIEF = 48                # 滚花凸起多少。★ 压低它 ★ 侧边不该抢正反面的视线
 EDGE_LETTER = 150               # 刻字**凹进去**多少（内凹，不是凸起）
 EDGE_AO = 46                    # 凹槽里烘多深的暗。见 make_edge 里的说明
@@ -455,12 +461,26 @@ def make_edge():
     text_h = np.array(text_img.filter(ImageFilter.GaussianBlur(1.1)), np.float32) / 255
 
     h = EDGE_RELIEF * reed_h * keep - EDGE_LETTER * text_h
-    h = np.array(Image.fromarray((h + 128).clip(0, 255).astype(np.uint8), "L")
-                 .filter(ImageFilter.GaussianBlur(1.3)), np.float32) - 128
-    h /= 255
+
+    # ★ 模糊和算坡度之前，先把首尾各接一段过去。★
+    #
+    # 这张长带是绕硬币一圈的，左右两边其实是**同一条缝**。
+    # 但高斯模糊和 np.gradient 都不知道这件事，会把两边当成断崖：
+    # 最左边那根齿的左侧坡度被算成 0，少了一侧的高光，
+    # 贴到硬币上看起来就是**凹下去**的——整圈永远有一根齿不对。
+    #
+    # 接一段过去再算，算完裁回来，这两步就知道它是个圆环了。
+    pad = 48                                  # 比模糊半径大得多就行
+    wrapped = np.concatenate([h[:, -pad:], h, h[:, :pad]], axis=1)
+    wrapped = np.array(
+        Image.fromarray((wrapped + 128).clip(0, 255).astype(np.uint8), "L")
+             .filter(ImageFilter.GaussianBlur(1.3)), np.float32) - 128
+    wrapped /= 255
 
     # ── 彩色图：平的一片银 + 极轻的明暗 + 凹槽里烘的那道暗
-    gy, gx = np.gradient(h)
+    gy_w, gx_w = np.gradient(wrapped)
+    h = wrapped[:, pad:-pad]
+    gy, gx = gy_w[:, pad:-pad], gx_w[:, pad:-pad]
     shade = np.clip((-gx - gy) * 300, -16, 16)
     occlusion = np.clip(-h, 0, None) / (EDGE_LETTER / 255) * EDGE_AO
 
