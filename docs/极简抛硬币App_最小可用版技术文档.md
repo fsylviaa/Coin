@@ -18,7 +18,7 @@
 | 功能 | 说明 |
 | --- | --- |
 | 全屏硬币 | 打开即全屏 3D 场景，硬币**躺在一个看不见的水平面上**；无按钮、隐藏状态栏 |
-| App 名称 | 手机上显示 **coin · 抛硬币**（`INFOPLIST_KEY_CFBundleDisplayName`）。工程与代码里仍叫 CoinFlip |
+| App 名称 | 桌面显示 **Coin**（`CFBundleDisplayName`），同时 `CFBundleName` 填 **抛硬币**。系统除显示名外也会索引后者，所以搜中文也能找到，桌面上却只出现短名。工程与代码里仍叫 CoinFlip。完整的「coin · 抛硬币」留给 App Store 的名称字段（在 App Store Connect 填，不在 App 包里） |
 | 底部状态行 | 屏幕底部常驻一行 `Coin: Ready / Tossing / Sol / Luna`，正式版也有。**这是整个 App 唯一的文字**。2026-10-09 的需求变更，原来写的是「无文字」 |
 | 上划抛掷 | 上划触发抛掷；划得越快抛得越高，有上下限 |
 | 随机结果 | 上划瞬间独立随机决定日面或月面，概率各 50% |
