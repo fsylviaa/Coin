@@ -169,6 +169,8 @@ final class CoinSceneState {
     /// 硬币**最低点**离平面多高。阴影看的是它，不是圆心——
     /// 歪着的硬币圆心被顶得很高，但它明明还贴在地上。
     var contactHeight: Float = 0
+    /// 硬币此刻离躺平多少度（0~90）。阴影按它减淡。
+    var coinTilt: Float = 0
     /// 脱手那一刻硬币已经被提到多高。飞行时要从这个高度接上，不能跳。
     var launchLift: Float = 0
 
@@ -341,6 +343,15 @@ struct CoinSceneView: View {
         return CoinScene.coinRadius * sin(a) + h * cos(a) - h
     }
 
+    /// 硬币转到这个累计角度时，离躺平还有多少度（0~90）。
+    ///
+    /// 翻转是绕横轴转的，转过 180 度又是平的（只是换了一面），
+    /// 所以先对 180 取余，再把超过 90 的折回来。
+    static func tiltFromFlat(degrees: Double) -> Float {
+        let m = abs(degrees).truncatingRemainder(dividingBy: 180)
+        return Float(m > 90 ? 180 - m : m)
+    }
+
     /// 系统的"减少动态效果"开着没有。
     ///
     /// 每帧读一次。它是一个缓存好的系统设置，很便宜；
@@ -364,6 +375,7 @@ struct CoinSceneView: View {
             : SIMD3<Float>(coin.position.x, state.contactHeight, coin.position.z)
         state.shadowStep = GroundShadow.update(shadow,
                                                coinPosition: position,
+                                               tiltDegrees: Self.reduceMotion ? 0 : state.coinTilt,
                                                lastStep: state.shadowStep)
     }
 
@@ -579,6 +591,9 @@ struct CoinSceneView: View {
             //   不是渲染的错，所以修在这里，而不是去跟渲染顺序较劲。
             let contact = Float(pose.height) + carry
             state.contactHeight = contact
+            // 真实的倾角要从累计翻转角折算——pose.tiltDegrees 是摇停用的，
+            // 飞行中几乎是 0，拿它算阴影会让翻滚时的影子一直是满的
+            state.coinTilt = Self.tiltFromFlat(degrees: pose.degrees)
             coin.position = [0, contact + Self.pivotLift(tiltDegrees: pose.tiltDegrees), 0]
 
             if pose.isFinished {
@@ -619,6 +634,7 @@ struct CoinSceneView: View {
 
         let ratio = CoinScene.maxDragLift > 0 ? state.lift / CoinScene.maxDragLift : 0
         let tilt = CoinScene.dragTilt * ratio * .pi / 180
+        state.coinTilt = CoinScene.dragTilt * ratio
 
         // ★ 转角必须加在这里。★ 漏了的话，自旋停下的那一帧硬币会原地弹回正，
         //   和当初落地时突然扭 72 度是同一个坑。

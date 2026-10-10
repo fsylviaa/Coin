@@ -45,6 +45,16 @@ enum GroundShadow {
     static let highScale: Float = 1.70
     static let highOpacity: Float = 0.13
 
+    /// 硬币侧着时阴影淡成什么样。
+    ///
+    /// 真硬币侧过来时，投下的是一条细线，不是一个圆——挡住的光本来就少了。
+    /// 所以按 cos(倾角) 的幂次减淡，物理上是对的。
+    ///
+    /// 它同时解决一个麻烦：硬币只有在**侧着**的时候下缘才会穿过这张平面，
+    /// 而那正是阴影被减得最淡的时候。躲不开的相交，刚好发生在影响最小的时刻。
+    /// 数字越大减得越狠（1.0 是严格按投影面积算）。
+    static let tiltFade: Float = 1.8
+
     /// 地面和阴影要沉到硬币下方，正好托住它的底面
     static let groundY: Float = -CoinScene.coinThickness / 2
     static let shadowY: Float = -CoinScene.coinThickness / 2 + 0.006
@@ -88,6 +98,7 @@ enum GroundShadow {
                                                       order: Layer.shadow.rawValue))
         entity.transform.rotation = simd_quatf(angle: -.pi / 2, axis: [1, 0, 0])
         entity.position = [0, shadowY, 0]
+        _ = shadowMaterials          // 趁现在把 49 档材质都做好，别留到第一帧
         return entity
     }
 
@@ -98,10 +109,12 @@ enum GroundShadow {
     /// - Parameters:
     ///   - shadow: 阴影那一片
     ///   - coinPosition: 硬币此刻的位置
+    ///   - tiltDegrees: 硬币此刻离躺平多少度（0~90）
     ///   - lastStep: 上一次用的透明度档位，用来判断要不要换材质
     /// - Returns: 这一次的透明度档位，调用方存起来下次传进来
     static func update(_ shadow: ModelEntity,
                        coinPosition: SIMD3<Float>,
+                       tiltDegrees: Float,
                        lastStep: Int) -> Int {
 
         // 升得越高，t 越接近 1
@@ -114,11 +127,13 @@ enum GroundShadow {
         // 跟着硬币横向走（本版硬币只上下动，但留着以后用）
         shadow.position = [coinPosition.x, shadowY, coinPosition.z]
 
-        let opacity = restOpacity + (highOpacity - restOpacity) * eased
-        let step = Int((opacity * opacitySteps).rounded())
+        // 侧着的硬币投的影子小而淡，和它遮住的光成正比
+        let flat = cos(min(max(tiltDegrees, 0), 90) * .pi / 180)
+        let opacity = (restOpacity + (highOpacity - restOpacity) * eased)
+            * pow(flat, tiltFade)
+        let step = min(max(Int((opacity * opacitySteps).rounded()), 0), Int(opacitySteps))
         if step != lastStep {
-            shadow.model?.materials = [material(textureNamed: "shadow_soft",
-                                                opacity: Float(step) / opacitySteps)]
+            shadow.model?.materials = [shadowMaterials[step]]
         }
         return step
     }
@@ -128,6 +143,19 @@ enum GroundShadow {
         CoinScene.heightScale * Float(StyleProfile.silver.maxHeight)
 
     // MARK: - 材质
+
+    /// 每一档透明度的材质都**提前做好**，之后每帧只是换个引用。
+    ///
+    /// 原来是跨档时现做一个材质。平时没事，但硬币快落地那几帧档位掉得最快，
+    /// 一帧里要连做好几个——于是落地那一下偶尔会顿一帧。
+    /// 和之前那次卡顿是同一类毛病：在渲染回调里分配对象。
+    ///
+    /// 在搭场景时就全部做好（makeShadow 里点一下），这样这点开销落在
+    /// 建场景那一刻，而不是第一帧。
+    static let shadowMaterials: [RealityKit.Material] =
+        (0...Int(opacitySteps)).map {
+            material(textureNamed: "shadow_soft", opacity: Float($0) / opacitySteps)
+        }
 
     /// 贴图只读一次，之后一直复用——每帧重新解码贴图会很卡。
     private static var textureCache: [String: TextureResource] = [:]
