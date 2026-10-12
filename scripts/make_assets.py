@@ -571,12 +571,18 @@ def make_environment():
 
 # ─────────────────────────── 地面与阴影 ───────────────────────────
 
-def radial_png(name, size, color, peak, falloff, power=2.0):
+def radial_png(name, size, color, peak, falloff, power=2.0, dither=False):
     """
     画一张"中间浓、四周化开"的圆形贴图。
 
     透明度按到中心的距离平滑衰减到 0，所以贴到场景里不会有任何硬边——
     这是"地面和背景自然融合、看不出地平线"的关键。
+
+    dither：写进 PNG 之前掺一点肉眼看不见的细噪点（打散色带）。
+    PNG 的透明度只有 256 级，peak 低的时候能用的级数更少，
+    一层层摊在一大片渐变上，就是一圈圈的同心环。噪点把每一级的硬边界
+    打散成细沙，环就看不见了。只改这一步，运行时开销完全不变。
+    噪点用固定种子，每次重新生成结果都一样。
     """
     yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
     c = (size - 1) / 2
@@ -587,10 +593,24 @@ def radial_png(name, size, color, peak, falloff, power=2.0):
     # 贴着边缘再收一道，杜绝圆形的轮廓线
     alpha *= np.clip((1 - r) / 0.55, 0, 1) ** 1.4
 
+    a = alpha * 255
+    if dither:
+        # 两个均匀噪点相减（三角分布，正负 1 级以内）：比单个噪点更"匀"，
+        # 不会在平缓处留下忽明忽暗的斑块。只在本来就有光的地方加，圆外保持全透明。
+        rng = np.random.default_rng(20261012)
+        noise = rng.random(a.shape) - rng.random(a.shape)
+        # 减 0.5 再四舍五入：原来是直接截断（平均暗半级），
+        # 这样换算下来整体亮度和原来一模一样，只是台阶没了。
+        a = np.where(alpha > 0, a + noise - 0.5, 0)
+        a = np.rint(a)
+    else:
+        a = np.floor(a)                         # 和原来的写法一致（截断）
+    a = np.clip(a, 0, 255).astype(np.uint8)
+
     rgb = np.zeros((size, size, 3), dtype=np.uint8)
     rgb[:, :] = color
     img = Image.fromarray(rgb, "RGB").convert("RGBA")
-    img.putalpha(Image.fromarray((alpha * 255).astype(np.uint8), "L"))
+    img.putalpha(Image.fromarray(a, "L"))
 
     path = OUT / f"{name}.png"
     img.save(path, "PNG", optimize=True)
@@ -617,8 +637,13 @@ def make_ground_and_shadow():
     # falloff 从 0.34 摊到 0.42：硬币升高时阴影会放大到半径 1.63，
     # 而光晕原来只在 0.41 以内够亮——阴影大半落在本来就黑的地方，
     # 没有东西可以压暗，所以"抛起时看不见影子"。把光给它铺开一点。
-    radial_png("ground_fade", 512, color=(225, 231, 255),
-               peak=0.313, falloff=0.42, power=1.6)
+    #
+    # ★ P01：边长 512 → 1024，并打开 dither。★
+    # peak=0.313 意味着透明度最高只有 80 级，摊在屏幕几百像素上约每 6 px 跳一级，
+    # 看起来就是硬币周围一圈圈的同心环。dither 把台阶打散；
+    # 边长翻倍是为了让每个噪点在屏幕上约 1 像素，否则噪点被放大成颗粒。
+    radial_png("ground_fade", 1024, color=(225, 231, 255),
+               peak=0.313, falloff=0.42, power=1.6, dither=True)
 
     # 阴影：纯黑，中间最浓，边缘很散，压在地面上。
     # 硬币越高，这张图会被放得越大、调得越淡，自然就"变大变散变淡"。
