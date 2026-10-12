@@ -512,22 +512,12 @@ def d_textwidth(draw, text, font) -> float:
 
 # ─────────────────────────── 环境贴图 ───────────────────────────
 
-def make_environment():
+def _studio_gray(W=1024, H=512):
     """
-    画一张"虚拟摄影棚"。
-
-    真金属之所以好看，是因为它**映出周围的环境**——灯箱、墙面、反光板。
-    我们的场景除了黑背景什么都没有，金属就显得死板发灰。
-    这张图就是给硬币造一个可以反射的世界。
-
-    它是一张"全景展开图"：横向一圈是四周 360 度，纵向从头顶到脚下。
-    手机会把它卷成一个球罩在场景外面，硬币表面映出的就是它。
-
-    棚里布了：头顶一块大灯箱、左右两块侧灯箱、斜前方一块主灯箱，
-    还有一圈很暗的地面。灯箱边缘都是柔的，这样映在硬币上才是柔和的光带，
-    而不是一个个硬邦邦的亮点。
+    虚拟摄影棚的灰度图（0~255）。make_environment 和 make_night_environment 共用，
+    保证"夜空版"里的灯箱和影棚版一模一样。改灯箱只改这里。
     """
-    W, H = 1024, 512
+    s = W / 1024
 
     # 底色不是全黑，而是中等偏暗的灰。
     # 实测参考图里最暗处也有 90 左右，不是死黑——金属背光面映的是棚里的墙，
@@ -561,11 +551,107 @@ def make_environment():
 
     # 只稍微糊一下。糊过头，亮暗之间会填满中间调，
     # 币面就从"黑白分明"变成"一片灰"——这正是上一版发灰的原因。
-    img = img.filter(ImageFilter.GaussianBlur(9))
+    return img.filter(ImageFilter.GaussianBlur(9 * s))
 
+
+def make_environment():
+    """
+    画一张"虚拟摄影棚"。
+
+    真金属之所以好看，是因为它**映出周围的环境**——灯箱、墙面、反光板。
+    我们的场景除了黑背景什么都没有，金属就显得死板发灰。
+    这张图就是给硬币造一个可以反射的世界。
+
+    它是一张"全景展开图"：横向一圈是四周 360 度，纵向从头顶到脚下。
+    手机会把它卷成一个球罩在场景外面，硬币表面映出的就是它。
+
+    棚里布了：头顶一块大灯箱、左右两块侧灯箱、斜前方一块主灯箱，
+    还有一圈很暗的地面。灯箱边缘都是柔的，这样映在硬币上才是柔和的光带，
+    而不是一个个硬邦邦的亮点。
+
+    P03b 起 App 用的是 night_env.png（见下面），这张保留作对照、随时可换回。
+    """
+    W, H = 1024, 512
+    img = _studio_gray(W, H)
     rgb = Image.merge("RGB", (img, img, img.point(lambda v: min(255, int(v * 1.04)))))
     path = OUT / "studio_env.png"
     rgb.save(path, "PNG", optimize=True)
+    print(f"  {path.name}  {W}x{H}  {path.stat().st_size // 1024} KB")
+
+
+# ── 夜空版环境反射（P03b）──
+#
+# 作者提议：让硬币倒映这片银河夜空，而不是摄影棚——硬币的色调才和背景融在一起。
+#
+# ★ 灯箱原样保留，只换灯箱以外的部分。★
+#   硬币的银亮全靠那几块大灯箱撑着；整张换成夜空的话，金属只映出暗的东西，
+#   就会变暗发灰（上一版"发灰"就是这个原因）。所以：
+#     • 亮灯箱：和影棚版一模一样（共用 _studio_gray）
+#     • 灯箱以外：换成夜色（亮度和影棚的墙相当，只是偏蓝）+ 一圈银河 + 星点，
+#       影棚原来的暗区、地面照样更暗，币面上压出深色带子的效果不变
+# 分辨率比影棚版高一倍，星点映到币面上才是清楚的小亮点。
+NIGHT_W, NIGHT_H = 2048, 1024
+NIGHT_SEED = 20261014
+NIGHT_BASE = np.array([66, 77, 116], np.float32)    # 夜色底：亮度和影棚底色 96 相当，但偏蓝
+NIGHT_BAND = np.array([70, 70, 80], np.float32)     # 银河在夜色上再亮多少
+NIGHT_STARS = 2200
+# 夜色留几成蓝（0 是纯灰，1 是满的蓝）。越靠近灯箱越接近中性灰，亮面不发蓝。
+# 第一版是满的蓝，作者真机看："太蓝了，特别是亮面过于蓝"。
+NIGHT_SAT = 0.5
+
+
+def make_night_environment():
+    W, H = NIGHT_W, NIGHT_H
+    rng = np.random.default_rng(NIGHT_SEED)
+    studio = np.array(_studio_gray(W, H)).astype(np.float32)
+    ys, xs = np.mgrid[0:H, 0:W].astype(np.float32)
+    az = xs / W * 360
+    el = 90 - ys / H * 180
+
+    # 夜色的明暗跟着影棚走：暗区仍然暗、地面仍然略暗、靠近灯箱渐亮，只是换成蓝色
+    shade = studio / 96.0
+    px = W / 360
+    cloud = (_blur_noise(rng, H, W, 3 * px) + 0.6 * _blur_noise(rng, H, W, 1.2 * px)) / 1.6
+    # 银河：绕一整圈的一条斜带，大致在地平线附近起伏
+    band_el = 18 * np.sin(np.radians(az - 40)) - 10
+    band = np.exp(-((el - band_el) / 9) ** 2) * np.clip(0.75 + 0.45 * cloud, 0, 1.5)
+    night = NIGHT_BASE[None, None] * np.clip(shade, 0.35, 2.0)[..., None] \
+        + band[..., None] * NIGHT_BAND
+
+    # 去饱和：整体只留一半的蓝；越靠近灯箱越接近中性灰。
+    # 第一版这里没做，灯箱周围一圈被提亮的夜色是亮蓝色，币面亮处整片发蓝。
+    lum = (night @ np.array([0.2126, 0.7152, 0.0722], np.float32))[..., None]
+    sat = NIGHT_SAT * np.clip((1.6 - shade) / 0.6, 0, 1)[..., None]
+    night = lum + (night - lum) * sat
+
+    # 星点：小而亮，靠近银河更密
+    k = 0
+    while k < NIGHT_STARS:
+        x, y = rng.uniform(0, W), rng.uniform(0, H)
+        e = 90 - y / H * 180
+        a = x / W * 360
+        be = 18 * math.sin(math.radians(a - 40)) - 10
+        if rng.random() > 0.3 + 0.7 * math.exp(-((e - be) / 12) ** 2):
+            continue
+        k += 1
+        b = rng.choice([255, 220, 180, 140], p=[0.08, 0.17, 0.35, 0.4])
+        r = 1.1 if b >= 220 else 0.8
+        x0, x1, y0, y1 = int(x - 3), int(x + 4), int(y - 3), int(y + 4)
+        X, Y = np.meshgrid(np.arange(max(x0, 0), min(x1, W)), np.arange(max(y0, 0), min(y1, H)))
+        g = np.exp(-((X - x) ** 2 + (Y - y) ** 2) / (2 * r * r))[..., None]
+        tint = np.array([[1, 1, 1], [0.85, 0.9, 1], [1, 0.92, 0.82]][rng.integers(3)])
+        night[Y, X] = night[Y, X] * (1 - g) + b * tint * g
+
+    # 影棚的亮灯箱原样盖回去（柔边过渡，不留一圈硬线）
+    lamp = np.clip((studio - 140) / (235 - 140), 0, 1)[..., None]
+    lamp = lamp * lamp * (3 - 2 * lamp)
+    white = np.stack([studio, studio, np.minimum(255, studio * 1.04)], -1)
+    out = night * (1 - lamp) + white * lamp
+    out += rng.random(out.shape) - rng.random(out.shape)       # 打散色带
+
+    img = Image.fromarray(np.clip(np.rint(out), 0, 255).astype(np.uint8), "RGB")
+    path = OUT / "night_env.png"
+    img.save(path, "PNG", optimize=True)
     print(f"  {path.name}  {W}x{H}  {path.stat().st_size // 1024} KB")
 
 
@@ -953,6 +1039,7 @@ if __name__ == "__main__":
     make_edge()
     print("生成环境贴图：")
     make_environment()
+    make_night_environment()
     print("生成地面与阴影：")
     make_ground_and_shadow()
     print("生成银河星空：")

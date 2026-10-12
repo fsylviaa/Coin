@@ -36,6 +36,7 @@ final class ResourcesTests: XCTestCase {
             ("ground_fade", "png"),
             ("star_dots", "png"),
             ("sky_milkyway", "png"),
+            ("night_env", "png"),
             ("shadow_soft", "png"),
             (style.tossSound, "wav"),
             (style.landSound, "wav"),

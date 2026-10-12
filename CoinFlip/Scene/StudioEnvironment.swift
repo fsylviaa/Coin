@@ -15,9 +15,16 @@ import UIKit
 
 enum StudioEnvironment {
 
+    /// 硬币倒映的是哪张全景图。
+    ///
+    /// P03b 起是 night_env：影棚的亮灯箱原样保留（银亮靠它们），
+    /// 灯箱以外换成夜色、银河和星点，硬币的色调才和背景融在一起。
+    /// ★ 想换回原来的影棚，把这里改回 "studio_env" 即可，两张图都在。★
+    static let imageName = "night_env"
+
     /// 读取全景图并做成环境资源。失败就返回空，调用方会跳过。
     static func load() async -> EnvironmentResource? {
-        guard let url = Bundle.main.url(forResource: "studio_env", withExtension: "png"),
+        guard let url = Bundle.main.url(forResource: imageName, withExtension: "png"),
               let image = UIImage(contentsOfFile: url.path),
               let cgImage = image.cgImage else { return nil }
         return try? await EnvironmentResource(equirectangular: cgImage)
