@@ -651,6 +651,124 @@ def make_ground_and_shadow():
                peak=1.0, falloff=0.36, power=1.7)
 
 
+# ─────────────────────────── 银河星空（P02） ───────────────────────────
+#
+# 背景分两层，都钉在离硬币很远的大球面上（见 StarField.swift）：
+#   1. sky_milkyway.png  底子：深蓝黑底 + 一条斜穿的淡银河带 + 带里的暗尘带。
+#      全是软的云状明暗，所以贴图分辨率不用高（每度约 20 像素，放大三倍也不糊）。
+#   2. star_dots.png     一颗颗星。软的底子上画不出锐利的星，所以星点单独做成小方片，
+#      每颗在屏幕上都是清楚的小点。
+#
+# 两层用同一套"方向"坐标（down 往下转了多少度、side 往旁边偏了多少度），
+# 银河带的中线在两边是同一个公式（band_distance），星点才会扎堆在银河里。
+# ★ 改银河的位置，要同时改这里和 StarField.bandDistance。★
+
+SKY_W, SKY_H = 1024, 2048
+SKY_SIDE = 26.0                     # 和 StarField.Patch.sideMax 一致
+SKY_DOWN = (-4.0, 112.0)            # 和 StarField.Patch.downMin / downMax 一致
+SKY_BASE = np.array([5, 7, 17], np.float32)     # 底色：深蓝黑，不是死黑
+SKY_BAND = np.array([44, 47, 66], np.float32)   # 银河最亮处的颜色。★ 背景，不能抢硬币 ★
+SKY_SEED = 20261012
+BAND_SLOPE = 0.32                   # 银河斜多少：side = 0.32 × (down − 55)
+BAND_CENTER = 55.0
+
+
+def band_distance(side, down):
+    """到银河中线的角距离（度）。StarField.bandDistance 是同一个公式。"""
+    return (side - BAND_SLOPE * (down - BAND_CENTER)) / math.sqrt(1 + BAND_SLOPE ** 2)
+
+
+def _blur_noise(rng, h, w, sigma):
+    """一张平滑的随机起伏图（高斯模糊过的噪点，用频域做，只靠 numpy）。"""
+    n = rng.standard_normal((h, w)).astype(np.float32)
+    fy = np.fft.fftfreq(h)[:, None]
+    fx = np.fft.fftfreq(w)[None, :]
+    g = np.exp(-2 * (np.pi * sigma) ** 2 * (fx ** 2 + fy ** 2))
+    out = np.real(np.fft.ifft2(np.fft.fft2(n) * g))
+    return (out - out.mean()) / (out.std() + 1e-9)
+
+
+def _fbm(rng, h, w, sigmas, weights):
+    """几层粗细不同的起伏叠在一起，像云。"""
+    out = sum(wt * _blur_noise(rng, h, w, s) for s, wt in zip(sigmas, weights))
+    return out / out.std()
+
+
+def make_sky():
+    rng = np.random.default_rng(SKY_SEED)
+    h, w = SKY_H, SKY_W
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+    # 第一行是 down 最小（最靠近水平），往下 down 越来越大；最左一列是 side 最小
+    side = -SKY_SIDE + 2 * SKY_SIDE * (xs + 0.5) / w
+    down = SKY_DOWN[0] + (SKY_DOWN[1] - SKY_DOWN[0]) * (ys + 0.5) / h
+    dist = band_distance(side, down)
+    px = w / (2 * SKY_SIDE)                         # 每度多少像素
+
+    cloud = _fbm(rng, h, w, (2.6 * px, 1.1 * px, 0.45 * px), (1, .7, .45))
+    band = np.exp(-(dist / 6.5) ** 2)
+    glow = np.clip(band * (0.7 + 0.5 * cloud), 0, 1.5)
+    wide = np.exp(-(dist / 20.0) ** 2) * 0.16       # 银河两侧一层极淡的光，外面才不是死黑
+    lane = np.clip(_fbm(rng, h, w, (0.9 * px, 0.35 * px), (1, .6)) * 0.9, 0, 1) \
+        * np.exp(-((dist + 1.0) / 3.0) ** 2)        # 暗尘带：银河中间偏一侧的几道暗缝
+
+    rgb = SKY_BASE + (glow + wide)[..., None] * SKY_BAND \
+        - (lane * 0.55 * band)[..., None] * SKY_BAND
+    rgb = np.maximum(rgb, SKY_BASE * 0.6)
+    noise = rng.random(rgb.shape) - rng.random(rgb.shape)   # 打散色带，同 P01
+    rgb = np.clip(np.rint(rgb + noise), 0, 255).astype(np.uint8)
+
+    img = Image.fromarray(rgb, "RGB")
+    path = OUT / "sky_milkyway.png"
+    img.save(path, "PNG", optimize=True)
+    print(f"  {path.name}  {w}x{h}  {path.stat().st_size // 1024} KB")
+
+
+# 星点图：每格 64×64 一颗星。五档亮度 × 三种颜色 = 横排 15 格。
+# 格子顺序：先按档（0 星芒 → 4 极暗），每档里依次是 冷 / 白 / 暖。
+# StarField.swift 按同样的顺序取格子，改这里的档数或颜色数要一起改。
+#
+# 颜色写在 RGB 里，亮暗写在透明度里——星点是半透明地叠在银河上的，
+# 不能带黑边（不透明的方片会在银河上压出一个个黑方块）。
+STAR_CELL = 64
+STAR_TIERS = [
+    # (最亮处, 星核大小 sigma 像素, 外圈晕占比, 带不带十字星芒)
+    (255, 3.2, 0.16, True),     # 0 星芒：极少数最亮的
+    (255, 5.0, 0.14, False),    # 1 亮
+    (210, 5.0, 0.12, False),    # 2 中
+    (150, 5.0, 0.10, False),    # 3 暗
+    (105, 5.0, 0.08, False),    # 4 极暗
+]
+STAR_COLORS = [(214, 228, 255), (255, 255, 255), (255, 232, 204)]   # 冷 / 白 / 暖
+
+
+def make_star_dots():
+    n = STAR_CELL
+    yy, xx = np.mgrid[0:n, 0:n].astype(np.float32)
+    c = (n - 1) / 2
+    dx, dy = xx - c, yy - c
+    d2 = dx ** 2 + dy ** 2
+    edge = np.clip((1 - np.sqrt(d2) / c) / 0.2, 0, 1)     # 贴着格子边收到 0
+    cells = []
+    for peak, sigma, glow_share, flare in STAR_TIERS:
+        shape = np.exp(-d2 / (2 * sigma ** 2)) \
+            + glow_share * np.exp(-d2 / (2 * (sigma * 3.2) ** 2))
+        if flare:
+            spike = np.exp(-dy ** 2 / 1.2) * np.exp(-np.abs(dx) / 9) \
+                + np.exp(-dx ** 2 / 1.2) * np.exp(-np.abs(dy) / 9)
+            shape = shape + 0.45 * spike
+        alpha = np.clip(shape / shape.max(), 0, 1) * edge * peak
+        for color in STAR_COLORS:
+            cell = np.zeros((n, n, 4), np.float32)
+            cell[..., :3] = color
+            cell[..., 3] = alpha
+            cells.append(cell)
+    atlas = np.concatenate(cells, axis=1)
+    img = Image.fromarray(np.clip(np.rint(atlas), 0, 255).astype(np.uint8), "RGBA")
+    path = OUT / "star_dots.png"
+    img.save(path, "PNG", optimize=True)
+    print(f"  {path.name}  {img.size[0]}x{img.size[1]}  {path.stat().st_size // 1024} KB")
+
+
 # ─────────────────────────── App 图标 ───────────────────────────
 
 # 图标尺寸（像素）。iOS 要一张 1024 的，其余由系统缩。
@@ -803,6 +921,9 @@ if __name__ == "__main__":
     make_environment()
     print("生成地面与阴影：")
     make_ground_and_shadow()
+    print("生成银河星空：")
+    make_sky()
+    make_star_dots()
     print("生成 App 图标：")
     make_icon()
     print("生成音效：")

@@ -66,7 +66,11 @@ enum GroundShadow {
     // MARK: - 画面先后
 
     /// 地面和阴影共用一个排序分组，组内按 order 从小到大画。
-    private static let sortGroup = ModelSortGroup(depthPass: nil)
+    /// StarField 的星点也排进这一组（最先画），所以不是 private
+    static let sortGroup = ModelSortGroup(depthPass: nil)
+
+    /// 星点在这一组里的顺序：比地面更早，地面光晕才会盖在星点上面
+    static let starsOrder: Int32 = -1
 
     private enum Layer: Int32 {
         case ground = 0

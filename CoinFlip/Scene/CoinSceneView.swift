@@ -203,6 +203,16 @@ final class CoinSceneState {
     var lastTick: Date?
     /// 等待状态是从什么时候开始的，用来算呼吸的相位
     var idleSince = Date()
+
+    // ── 银河背景（P02）──
+    var starField: Entity?
+    /// 背景此刻"看起来"处在镜头的哪个角度。它慢半拍地追着镜头，见 updateSky。
+    /// 为空表示还没开始追（第一帧直接对齐，不要从别处滑过来）
+    var skyElevation: Float?
+    var skyYaw: Float = 0
+    /// 背景此刻转动的速度（度/秒）。弹簧式地追，需要记住速度
+    var skyElevationSpeed: Float = 0
+    var skyYawSpeed: Float = 0
 }
 
 struct CoinSceneView: View {
@@ -238,10 +248,17 @@ struct CoinSceneView: View {
 
     var body: some View {
         RealityView { content in
+            // 银河星空（P02）：最先放，离得最远，其余东西都画在它前面
+            let starField = StarField.make()
+            content.add(starField)
+            state.starField = starField
+
             let coin = makeCoin()
             coin.name = "coin"
             content.add(coin)
-            content.add(GroundShadow.makeGround())
+            // 地面那圈白色光晕（ground_fade）P02 起不再放：作者决定删掉，只留影子。
+            // 有了银河背景，影子压在星空上照样看得见，不再需要一片亮地来衬它。
+            // 顺带：横切灰边（§2.5）和 P01 的环纹都出在这片光晕上，一并没了。
 
             let shadow = GroundShadow.makeShadow()
             content.add(shadow)
@@ -548,6 +565,46 @@ struct CoinSceneView: View {
         )
         camera.position = position
         camera.look(at: lookAt, from: position, relativeTo: nil)
+
+        updateSky(cameraElevation: elevation, cameraYaw: yaw, dt: dt)
+    }
+
+    /// 背景慢半拍地追着镜头走（P02）。
+    ///
+    /// 银河钉在远处不动的话，镜头一动它就整片扫过去：抛起那一下镜头 0.22 秒
+    /// 从特写退回远景，背景也刷地扫过一大片，然后跟着镜头一下子停住——
+    /// 停住那一刻正好是硬币飞向最高点的时候，作者看着像"卡了一下"。
+    ///
+    /// 所以背景自己转一点，抵掉镜头的一部分动作：
+    ///   • 只走镜头的三成（StarField.followShare），整体慢下来
+    ///   • 像挂在弹簧上一样追（StarField.settleSeconds）：从静止慢慢起步、
+    ///     中段最快、再慢慢收住。镜头猛地一动，背景只是缓缓滑开，
+    ///     硬币从最高点落下时它还在滑，三秒左右才落定——这就是"余韵"。
+    ///   ★ 第一版用的是"每帧靠近一点"，一开始最快，作者看着是"突然下转"。★
+    ///
+    /// 每帧只改一下它的朝向，不换材质、不改形状，开销可以忽略。
+    private func updateSky(cameraElevation: Float, cameraYaw: Float, dt: Double) {
+        guard let sky = state.starField else { return }
+        let target = StarField.seenAngles(cameraElevation: cameraElevation,
+                                          cameraYaw: cameraYaw)
+        if let current = state.skyElevation {
+            // 不过冲的弹簧：拉力 = rate² × 差距，阻力 = 2 × rate × 速度
+            let w = Float(StarField.springRate)
+            let t = Float(min(dt, 0.05))      // 偶尔一帧很长时别让弹簧一步跨过头
+            let aE = w * w * (target.elevation - current) - 2 * w * state.skyElevationSpeed
+            state.skyElevationSpeed += aE * t
+            state.skyElevation = current + state.skyElevationSpeed * t
+            let aY = w * w * (target.yaw - state.skyYaw) - 2 * w * state.skyYawSpeed
+            state.skyYawSpeed += aY * t
+            state.skyYaw += state.skyYawSpeed * t
+        } else {
+            state.skyElevation = target.elevation
+            state.skyYaw = target.yaw
+        }
+        sky.orientation = StarField.orientation(cameraElevation: cameraElevation,
+                                                cameraYaw: cameraYaw,
+                                                seenElevation: state.skyElevation ?? target.elevation,
+                                                seenYaw: state.skyYaw)
     }
 
     private func lerp(_ a: Float, _ b: Float, _ t: Float) -> Float { a + (b - a) * t }
