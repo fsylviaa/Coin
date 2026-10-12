@@ -571,7 +571,7 @@ def make_environment():
 
 # ─────────────────────────── 地面与阴影 ───────────────────────────
 
-def radial_png(name, size, color, peak, falloff, power=2.0, dither=False):
+def radial_png(name, size, color, peak, falloff, power=2.0, dither=False, mottle=0.0):
     """
     画一张"中间浓、四周化开"的圆形贴图。
 
@@ -583,6 +583,11 @@ def radial_png(name, size, color, peak, falloff, power=2.0, dither=False):
     一层层摊在一大片渐变上，就是一圈圈的同心环。噪点把每一级的硬边界
     打散成细沙，环就看不见了。只改这一步，运行时开销完全不变。
     噪点用固定种子，每次重新生成结果都一样。
+
+    mottle：给透明度叠一层云絮状的明暗（0 是平滑的圆）。
+    暗夜背景上一团平滑的光，看着就是一盏灯照出的光圈，而且大片平滑的暗色渐变
+    正是环纹最容易出现的地方（P01、P03 都栽过）。有了云絮就没有平滑渐变，
+    看上去像银河里的一缕薄雾。
     """
     yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
     c = (size - 1) / 2
@@ -592,6 +597,15 @@ def radial_png(name, size, color, peak, falloff, power=2.0, dither=False):
     alpha[r > 1] = 0                                  # 圆外一律全透明
     # 贴着边缘再收一道，杜绝圆形的轮廓线
     alpha *= np.clip((1 - r) / 0.55, 0, 1) ** 1.4
+    if mottle > 0:
+        rng_m = np.random.default_rng(20261013)
+        cloud = (_blur_noise(rng_m, size, size, size * 0.035)
+                 + 0.6 * _blur_noise(rng_m, size, size, size * 0.012)) / 1.6
+        # 正中间留平滑（反正被硬币盖住），往外纹理才慢慢出来——
+        # 这样中心亮度是确定的，ShadowTests 量得准
+        strength = mottle * np.clip(r / 0.2, 0, 1)
+        alpha *= np.clip(1 + strength * cloud, 0.2, 2.0)
+        alpha = np.minimum(alpha, 1.0)
 
     a = alpha * 255
     if dither:
@@ -642,8 +656,26 @@ def make_ground_and_shadow():
     # peak=0.313 意味着透明度最高只有 80 级，摊在屏幕几百像素上约每 6 px 跳一级，
     # 看起来就是硬币周围一圈圈的同心环。dither 把台阶打散；
     # 边长翻倍是为了让每个噪点在屏幕上约 1 像素，否则噪点被放大成颗粒。
-    radial_png("ground_fade", 1024, color=(225, 231, 255),
-               peak=0.313, falloff=0.42, power=1.6, dither=True)
+    #
+    # ★ P03（方案 A，暗色承托光）：P02 删掉了上面这圈白光，影子随之看不见了——
+    #   影子只能"把亮的压暗"，底下全是暗的星空就没东西可压。
+    #   重新加回来，但改成属于这片夜空的样子：
+    #     • 颜色从近白改成冷蓝银，和银河一个色调，像银币反射的星光落在它底下的玻璃上
+    #     • 更小：falloff 0.42 → 0.36，只比硬币大一圈，不再是一大团光
+    #     • 更暗：peak 0.313 → 0.22，黑底上最亮约 56（原来约 80）
+    #     • power 1.6 → 1.4：尾巴拖长一点，硬币抛高、影子放大时外圈还有一点光可压
+    #   "亮色 + 低不透明度"的原则不变（见上面灰边那段），所以颜色仍取得很亮。
+    #
+    # ★ P03 第二版：作者真机看第一版——"太白，影响质感；环纹明显"。★
+    #   实测截图的亮度正好等于"星空 + 这团光按透明度叠上去"，手机没有额外提亮，
+    #   是设计本身的问题：一团平滑的亮光在暗夜里就是灯，也必然出环纹。所以：
+    #     • 更暗更蓝：peak 0.22 → 0.13，颜色 (205,220,255) → (150,178,255)
+    #     • 更小：falloff 0.36 → 0.30
+    #     • 加云絮纹理（mottle），不再是平滑的光圈
+    #   同时把银河挪到硬币正下方（BAND_CENTER），让影子压在银河上——
+    #   银河本身就是"有东西可压"的亮面，不用再靠这团光撑。
+    radial_png("ground_fade", 1024, color=(150, 178, 255),
+               peak=0.13, falloff=0.30, power=1.3, dither=True, mottle=0.6)
 
     # 阴影：纯黑，中间最浓，边缘很散，压在地面上。
     # 硬币越高，这张图会被放得越大、调得越淡，自然就"变大变散变淡"。
@@ -669,8 +701,10 @@ SKY_DOWN = (-4.0, 112.0)            # 和 StarField.Patch.downMin / downMax 一�
 SKY_BASE = np.array([5, 7, 17], np.float32)     # 底色：深蓝黑，不是死黑
 SKY_BAND = np.array([44, 47, 66], np.float32)   # 银河最亮处的颜色。★ 背景，不能抢硬币 ★
 SKY_SEED = 20261012
-BAND_SLOPE = 0.32                   # 银河斜多少：side = 0.32 × (down − 55)
-BAND_CENTER = 55.0
+BAND_SLOPE = 0.32                   # 银河斜多少：side = 0.32 × (down − BAND_CENTER)
+# 银河中线在 down 多少度时正好居中。30 ≈ 远景里硬币正后方，
+# 所以银河从硬币正下方穿过，影子压在银河上看得见（P03）。原来是 55，从硬币左边擦过去。
+BAND_CENTER = 30.0
 
 
 def band_distance(side, down):

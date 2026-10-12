@@ -30,13 +30,17 @@ final class ShadowTests: XCTestCase {
                 + "把 ground_fade 的颜色调亮、peak 按比例调低，黑底上的观感不变")
     }
 
-    /// 同时黑底上的光晕不能变——调亮颜色必须用降低不透明度来抵消
+    /// 黑底上承托光的亮度要守住：太亮又成了一团白光（P02 作者删掉过），
+    /// 太暗影子就没东西可压、又看不见了。
+    ///
+    /// P03 第二版定的是最亮通道约 33（第一版 56 作者嫌太白，原来的白色光晕约 80）。
+    /// 中心带云絮纹理，所以留的余量大一些。
+    /// 调亮颜色必须用降低不透明度来抵消，这个乘积才是眼睛看到的亮度。
     func testGroundGlowOnBlackIsUnchanged() throws {
         let (colour, alpha) = try groundCentre()
 
-        // 原来是 (74,76,84) × 0.95，最亮的通道约 80
-        XCTAssertEqual(colour * alpha, 80, accuracy: 12,
-                       "黑底上的光晕变了，地面的明暗观感会跟着变")
+        XCTAssertEqual(colour * alpha, 33, accuracy: 20,
+                       "黑底上的承托光亮度变了，影子的可见度和整体观感会跟着变")
     }
 
     /// 读出地面贴图正中心的颜色与不透明度（取最亮的通道）

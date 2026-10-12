@@ -134,7 +134,9 @@ enum StarField {
     /// ★ 和 make_assets.py 的 band_distance 是同一个公式，改一边必须改另一边。★
     static func bandDistance(down: Float, side: Float) -> Float {
         let slope: Float = 0.32
-        return (side - slope * (down - 55)) / (1 + slope * slope).squareRoot()
+        // 30：远景里硬币正后方，银河从硬币正下方穿过，影子压在银河上（P03）
+        let center: Float = 30
+        return (side - slope * (down - center)) / (1 + slope * slope).squareRoot()
     }
 
     /// 由两个角度（度）得到方向。

@@ -256,9 +256,11 @@ struct CoinSceneView: View {
             let coin = makeCoin()
             coin.name = "coin"
             content.add(coin)
-            // 地面那圈白色光晕（ground_fade）P02 起不再放：作者决定删掉，只留影子。
-            // 有了银河背景，影子压在星空上照样看得见，不再需要一片亮地来衬它。
-            // 顺带：横切灰边（§2.5）和 P01 的环纹都出在这片光晕上，一并没了。
+            // 硬币底下的承托光（P03 方案 A）。
+            // P02 曾把原来那圈白色光晕删掉，结果影子跟着看不见了——
+            // 影子只能把亮的东西压暗，底下全是暗的星空就没东西可压，硬币也像飘着。
+            // 现在加回来的是一小片冷蓝银色的暗光，和银河一个色调（见 make_assets.py）。
+            content.add(GroundShadow.makeGround())
 
             let shadow = GroundShadow.makeShadow()
             content.add(shadow)
