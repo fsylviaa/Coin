@@ -46,6 +46,22 @@ enum CoinScene {
     /// 拉回用多久。快，不耽误下一次抛掷
     static let zoomOutSeconds: Double = 0.22
 
+    /// 揭晓之后多久没人碰，镜头自己退回远景（P06）
+    static let idlePullBackAfter: Double = 10
+    /// 自己退回远景用多久。和抛掷时那种 0.22 秒的快退不同，这是没人看的时候
+    /// 悄悄换景，要慢、两头都软
+    static let idlePullBackSeconds: Double = 2.6
+
+    /// 自动退回远景时，第 elapsed 秒镜头推近的程度（1 特写 → 0 远景）。
+    ///
+    /// ★ 用两头都软的曲线，不用"每帧靠近一点"。★ 后者一开始最快，
+    ///   镜头会突然一动——背景"突然下转"就是这么栽过的（P02）。
+    static func pullBackZoom(from start: Double, elapsed: Double) -> Double {
+        let p = min(max(elapsed / idlePullBackSeconds, 0), 1)
+        let eased = p * p * p * (p * (p * 6 - 15) + 10)     // 起步、收尾都是零速度
+        return start * (1 - eased)
+    }
+
     /// 把时间表里的高度（米）换算成场景里的高度
     static let heightScale: Float = 0.85
 
@@ -243,6 +259,13 @@ final class CoinSceneState {
     /// 呼吸的时钟，从 App 打开算起。用它而不是"进入远景的时刻"，
     /// 呼吸收掉再回来时相位接得上
     let breathStart = Date()
+
+    // ── 揭晓后自动退回远景（P06）──
+    /// 上一次有人碰（或者状态刚变）的时刻，从这里开始数 10 秒
+    var lastActivity = Date()
+    /// 正在自动退回远景：从什么时候开始、当时推近到几成。为空表示没在退
+    var pullBackStart: Date?
+    var pullBackFrom: Double = 1
 }
 
 struct CoinSceneView: View {
@@ -336,6 +359,8 @@ struct CoinSceneView: View {
                 }
                 state.phase = phase
                 state.finishReported = false
+                state.lastActivity = Date()
+                state.pullBackStart = nil
             }
             state.startedAt = startedAt
             state.onFinished = onFinished
@@ -556,6 +581,8 @@ struct CoinSceneView: View {
     private func updateCamera(dt: Double, now: Date) {
         guard let camera = state.camera else { return }
 
+        checkIdlePullBack(now: now)
+
         let target: Double = {
             // 减少动态效果：镜头始终不动
             if Self.reduceMotion { return 0 }
@@ -572,10 +599,19 @@ struct CoinSceneView: View {
             return 0
         }()
 
-        let seconds = target > state.zoom ? CoinScene.zoomInSeconds : CoinScene.zoomOutSeconds
-        // 指数逼近：离目标越近走得越慢，自带缓入缓出的味道
-        let k = 1 - exp(-dt / max(seconds / 3, 0.0001))
-        state.zoom += (target - state.zoom) * k
+        if let start = state.pullBackStart {
+            // 揭晓后没人碰，正在慢慢退回远景（P06）
+            state.zoom = CoinScene.pullBackZoom(from: state.pullBackFrom,
+                                                elapsed: now.timeIntervalSince(start))
+            if now.timeIntervalSince(start) >= CoinScene.idlePullBackSeconds {
+                state.pullBackStart = nil
+            }
+        } else {
+            let seconds = target > state.zoom ? CoinScene.zoomInSeconds : CoinScene.zoomOutSeconds
+            // 指数逼近：离目标越近走得越慢，自带缓入缓出的味道
+            let k = 1 - exp(-dt / max(seconds / 3, 0.0001))
+            state.zoom += (target - state.zoom) * k
+        }
 
         let z = Float(state.zoom)
         var elevation = lerp(CoinScene.elevationFar, CoinScene.elevationNear, z)
@@ -609,6 +645,33 @@ struct CoinSceneView: View {
         camera.look(at: lookAt, from: position, relativeTo: nil)
 
         updateSky(cameraElevation: elevation, cameraYaw: yaw, dt: dt)
+    }
+
+    /// 揭晓后 10 秒没人碰，就悄悄退回远景（P06）。
+    ///
+    /// "有人碰"包括：手指按着、往上提、横拨让它转着。转着的时候不算闲着，
+    /// 停下来才开始数。
+    ///
+    /// ★ 退的途中一碰：当作"我还在看"，平滑地回到特写，重新数 10 秒。★
+    ///   第一版只是停掉慢退、却把"停在远景"留着，于是改走抛掷时那种 0.22 秒的
+    ///   快退，作者看到的是"直接躺下了"。
+    ///   要是这一碰其实是往上划着要抛，镜头照常快退——那是抛掷本来的样子。
+    private func checkIdlePullBack(now: Date) {
+        let busy = state.dragging || state.dragUp > 0 || state.spinVelocity != 0
+        if busy {
+            state.lastActivity = now
+            if state.pullBackStart != nil {
+                state.pullBackStart = nil
+                state.holdFar = false
+            }
+            return
+        }
+        guard case .resting = state.phase, !state.holdFar, !Self.reduceMotion else { return }
+        if now.timeIntervalSince(state.lastActivity) >= CoinScene.idlePullBackAfter {
+            state.holdFar = true                 // 从此停在远景，和冷启动一样，有呼吸
+            state.pullBackStart = now
+            state.pullBackFrom = state.zoom
+        }
     }
 
     /// 现在算不算"远景、没人碰"：这时才有游移和呼吸
