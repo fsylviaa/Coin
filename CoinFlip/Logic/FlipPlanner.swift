@@ -81,6 +81,32 @@ enum FlipPlanner {
     /// 太短就没有"晃几下才躺稳"的感觉。
     static let minSettleSeconds: Double = 0.85
 
+    /// 落地小跳的保底高度（米），叠加在"抛起高度 × 弹性"之上。
+    /// 只按比例的话，轻抛只跳起几厘米，镜头斜着看根本看不出来（作者："不够明显"）。
+    static let hopFloor: Double = 0.08
+
+    /// 小跳落回来那一下有多重（1 是落地那一下）。
+    /// 作者要的是"落地一震、弹起落回再一震"——它要明显，但比落地轻一点。
+    /// 大于 0.8，震动那边会给它也配一段闷响（见 HapticPlayer）。
+    static let hopLandingStrength: Double = 0.82
+
+    /// 第二下小跳是第一下大跳的几成高（作者要"大跳 + 小跳 + 嗒嗒嗒"）
+    static let secondHopRatio: Double = 0.3
+    /// 用力程度（0~1）到多少才有第二下小跳。作者：只在中等以上力度出现。
+    /// 轻抛只有一下大跳，时长也就基本不变
+    static let secondHopMinForce: Double = 0.5
+    /// 小跳落回那一下的轻重：比大跳落回轻，比磕碰重。小于 0.8，不配闷响
+    static let secondHopLandingStrength: Double = 0.55
+
+    /// 两下弹跳之后留给"嗒嗒嗒"和躺平的时间：两下弹跳总时长的这个比例，
+    /// 但至少 rattleMinSeconds。太短磕碰会挤成一团，躺平也显得急
+    static let rattleShare: Double = 0.45
+    static let rattleMinSeconds: Double = 0.32
+
+    /// 躺平前那串磕碰的起始轻重。和小跳落回那一下脱钩——
+    /// 小跳那下变重了，磕碰不能跟着变重，否则"嗒嗒嗒"会变成一串重击。
+    static let rattleStrength: Double = 0.19
+
     // MARK: - 决定结果（T07）
 
     /// 决定这一次抛出的是日面还是月面。
@@ -151,20 +177,33 @@ enum FlipPlanner {
         // 4. 按抛物线算出飞行时间：抛上去再落回来
         let landTime = flightDuration(height: height)
 
-        // 5. 落地之后：先一下小跳，再是一连串越来越密的边缘磕碰。
-        //    真硬币落在硬平面上几乎不弹，声音主要来自躺平前的那阵磕碰。
-        let hopHeight = height * style.bounciness * personality.hopScale
+        // 5. 落地之后：大跳 → 小跳 → 一连串越来越密的边缘磕碰（作者要的节奏）。
+        //    震动和声音照同一张表：落地最重（带闷响）、大跳落回第二重（带闷响）、
+        //    小跳落回第三下、然后是轻轻的"嗒嗒嗒"。
+        let hopHeight = (hopFloor + height * style.bounciness) * personality.hopScale
         let hop = FlipPlan.Bounce(height: hopHeight,
                                   duration: flightDuration(height: hopHeight))
-        let settle = max(hop.duration * 1.6, minSettleSeconds)
+        // 第二下小跳：只在中等以上力度出现
+        let hasSmallHop = force >= secondHopMinForce
+        let smallHeight = hopHeight * secondHopRatio
+        let small = FlipPlan.Bounce(height: smallHeight,
+                                    duration: flightDuration(height: smallHeight))
+        let bounces = hasSmallHop ? [hop, small] : [hop]
+        let hopsTime = bounces.reduce(0) { $0 + $1.duration }
+        let rattleTime = max(hopsTime * rattleShare, rattleMinSeconds)
+        let settle = max(hopsTime + rattleTime, minSettleSeconds)
         let endTime = landTime + settle
 
-        let hopStrength = (hopHeight / height).squareRoot()
         var contacts = [FlipPlan.Contact(time: landTime, strength: 1)]
-        contacts.append(.init(time: landTime + hop.duration, strength: hopStrength))
+        // 大跳落回：第二下明显的震动与声响
+        contacts.append(.init(time: landTime + hop.duration, strength: hopLandingStrength))
+        // 小跳落回：第三下，轻一点
+        if hasSmallHop {
+            contacts.append(.init(time: landTime + hopsTime, strength: secondHopLandingStrength))
+        }
 
         // 磕碰从小跳落回之后开始，一路密到停稳
-        let tapStart = landTime + hop.duration
+        let tapStart = landTime + hopsTime
         let tapSpan = endTime - tapStart
         let taps = max(personality.rattleTaps, 1)
         for k in 1...taps {
@@ -172,7 +211,7 @@ enum FlipPlanner {
             let fade = 1 - Double(k - 1) / Double(taps)
             // 磕碰一定比前面那下小跳更轻，整串才是一路衰下去的
             contacts.append(.init(time: tapStart + tapSpan * p,
-                                  strength: hopStrength * 0.8 * pow(fade, 2.0)))
+                                  strength: rattleStrength * pow(fade, 2.0)))
         }
 
         return FlipPlan(result: result,
@@ -180,7 +219,7 @@ enum FlipPlanner {
                         height: height,
                         halfTurns: halfTurns,
                         landTime: landTime,
-                        bounces: [hop],
+                        bounces: bounces,
                         contacts: contacts,
                         endTime: endTime,
                         personality: personality)

@@ -43,7 +43,8 @@ final class FlipPlanTests: XCTestCase {
     /// （小数计算有极微小误差，所以允许十亿分之一的偏差）
     func testBounceHeight() {
         let plan = FlipPlanner.makePlan(speed: 1500, distance: 200, startFace: .sun, result: .sun, style: style)
-        XCTAssertEqual(plan.bounceHeight, plan.height * style.bounciness, accuracy: 1e-9)
+        XCTAssertEqual(plan.bounceHeight, FlipPlanner.hopFloor + plan.height * style.bounciness,
+                       accuracy: 1e-9)
     }
 
     /// 传进去的结果，原样出现在时间表里，不会被动画逻辑改掉
@@ -104,5 +105,44 @@ final class FlipPlanTests: XCTestCase {
     func testTotalDurationIsAcceptable() {
         let plan = FlipPlanner.makePlan(speed: 100_000, distance: 10_000, startFace: .sun, result: .moon, style: style)
         XCTAssertLessThan(plan.endTime, 2.5, "最用力一划要 \(plan.endTime) 秒才停稳，太久了")
+    }
+
+    /// ★ 大跳 + 小跳 + 嗒嗒嗒，时长要有上限 ★
+    ///
+    /// 作者要"大跳 + 小跳 + 嗒嗒嗒"，多一下小跳躲不开要变长一点；
+    /// 但最用力的一抛、性格里最高的弹跳，落地后那段也不许超过下限 0.5 秒（现在最多约 +0.48）。
+    /// 轻抛只有一下大跳，没有小跳
+    func testLightTossHasNoSmallHop() {
+        let plan = FlipPlanner.makePlan(speed: 300, distance: 40, startFace: .sun, result: .moon)
+        XCTAssertEqual(plan.bounces.count, 1)
+    }
+
+    func testHigherBounceDoesNotLengthenTheFlip() {
+        let strongest = FlipPersonality(landingTiltOffset: 0,
+                                        hopScale: FlipPersonality.hopScaleRange.upperBound,
+                                        rattleTaps: FlipPlanner.rattleTaps,
+                                        precessionScale: 1, side: 1)
+        for speed in stride(from: 200.0, through: 4000.0, by: 200.0) {
+            let plan = FlipPlanner.makePlan(speed: speed, distance: 400,
+                                            startFace: .sun, result: .moon,
+                                            personality: strongest)
+            XCTAssertLessThanOrEqual(plan.endTime - plan.landTime,
+                                     FlipPlanner.minSettleSeconds + 0.5,
+                                     "速度 \(Int(speed))：小跳太高，把落地后那段拉长了")
+            // 小跳落回那一下要明显：不能和落地挤在一起，至少隔开 0.35 秒
+            XCTAssertGreaterThan(plan.contacts[1].time - plan.contacts[0].time, 0.35,
+                                 "速度 \(Int(speed))：大跳落回太快，两下震动分不开")
+            // 小跳只在中等以上力度出现
+            let force = FlipPlanner.forceFactor(speed: speed, distance: 400)
+            XCTAssertEqual(plan.bounces.count, force >= FlipPlanner.secondHopMinForce ? 2 : 1,
+                           "速度 \(Int(speed))：小跳该不该出现判错了")
+            if plan.bounces.count == 2 {
+                XCTAssertGreaterThan(plan.contacts[2].time - plan.contacts[1].time, 0.18,
+                                     "速度 \(Int(speed))：小跳落回太快，和大跳那下分不开")
+                // 节奏：落地 > 大跳落回 > 小跳落回 > 嗒嗒嗒
+                XCTAssertGreaterThan(plan.contacts[1].strength, plan.contacts[2].strength)
+                XCTAssertGreaterThan(plan.contacts[2].strength, plan.contacts[3].strength)
+            }
+        }
     }
 }

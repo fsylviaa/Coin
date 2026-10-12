@@ -30,6 +30,11 @@ struct StyleProfile {
     /// 真硬币落在硬平面上几乎不弹，所以这个数很小——
     /// 落地后的声音主要来自躺平前的边缘磕碰，不是弹跳。
     /// 必须大于 0 小于 1，否则会越弹越高。
+    ///
+    /// P11 之后作者要"落地后弹得更高，落地一震、弹起落回再一震"：
+    /// 0.055 → 0.16 → 0.2，并且另加一个保底高度（FlipPlanner.hopFloor），
+    /// 轻抛也看得清再跳一下。最用力那一抛，落地后那段只长约 0.1 秒。
+    /// FlipPlanTests 守着这一条，不让它悄悄变长。
     let bounciness: Double
 
     /// 抛起高度的下限（单位：米）。轻轻一划也至少抛这么高。
@@ -50,7 +55,7 @@ extension StyleProfile {
         textureEdge: "edge_silver",
         tossSound: "toss_silver",
         landSound: "land_silver",
-        bounciness: 0.055,
+        bounciness: 0.2,
         minHeight: 0.12,
         maxHeight: 0.65
     )

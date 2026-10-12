@@ -96,8 +96,8 @@ final class PersonalityTests: XCTestCase {
                                               precessionScale: 1, side: 1)
             let plan = FlipPlanner.makePlan(speed: 1500, distance: 200, startFace: .sun,
                                             result: .moon, personality: personality)
-            // 落地一下 + 小跳落回一下 + 磕碰若干下
-            XCTAssertEqual(plan.contacts.count, 2 + taps)
+            // 落地一下 + 每一下弹跳落回各一下 + 磕碰若干下
+            XCTAssertEqual(plan.contacts.count, 1 + plan.bounces.count + taps)
         }
     }
 
