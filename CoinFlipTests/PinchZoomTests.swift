@@ -26,12 +26,18 @@ final class PinchZoomTests: XCTestCase {
     /// 第一版在两头硬停，作者看着"停得太突然"
     func testRubberBandAtBothEnds() {
         let m = CoinScene.pinchOvershoot
-        let far = CoinScene.pinchZoom(from: 0.9, scale: 10)
+        // 正常幅度地多张开一点：过了头，但没碰到余量的上限
+        let far = CoinScene.pinchZoom(from: 0.9, scale: 1.5)
         XCTAssertGreaterThan(far, 1, "到头就硬停了，没有橡皮筋")
         XCTAssertLessThan(far, 1 + m)
-        let near = CoinScene.pinchZoom(from: 0.1, scale: 0.01)
+        let near = CoinScene.pinchZoom(from: 0.1, scale: 0.6)
         XCTAssertLessThan(near, 0, "到头就硬停了，没有橡皮筋")
         XCTAssertGreaterThan(near, -m)
+        // 极端幅度（手指张到十倍）：无限贴近上限，但绝不越过。
+        // ★ 这里只能用"不超过"，不能用"小于"——贴得太近时电脑的小数精度
+        //   会把它算成正好等于上限（第一版就栽在这里，测试误报失败）。
+        XCTAssertLessThanOrEqual(CoinScene.pinchZoom(from: 0.9, scale: 10), 1 + m)
+        XCTAssertGreaterThanOrEqual(CoinScene.pinchZoom(from: 0.1, scale: 0.01), -m)
         // 越往外越拉不动：多张开同样一截，过界越多走得越少
         let a = CoinScene.pinchZoom(from: 1, scale: 1.1) - 1
         let b = CoinScene.pinchZoom(from: 1, scale: 1.21) - CoinScene.pinchZoom(from: 1, scale: 1.1)

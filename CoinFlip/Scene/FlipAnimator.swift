@@ -31,7 +31,13 @@ enum FlipAnimator {
         let tiltDegrees: Double
         /// 绕竖直轴转了多少度——落地后在平面上打转的方位。
         /// 它不改变朝上的是哪一面，只是让摇摆的方向绕着走。
+        ///
+        /// P09 起飞行中也有：翻转轴在空中缓缓绕竖直方向转（进动），
+        /// 落地时以同样的速度接上原来的打转，从抛起到躺平是一整个动作。
         let wobbleDegrees: Double
+        /// 翻转轴此刻往竖直方向歪了多少度（P09，章动）。
+        /// 只在飞行中有，起飞和落地那一刻都是 0，所以不影响最后朝上的是哪一面。
+        let nutationDegrees: Double
         /// 这一刻是不是已经彻底停稳了
         let isFinished: Bool
     }
@@ -42,18 +48,24 @@ enum FlipAnimator {
     ///   - t: 从脱手算起过了多少秒
     ///   - plan: 这一次抛掷的时间表
     ///   - heightScale: 把时间表里的高度（米）换算成场景里的高度
-    static func pose(at t: Double, plan: FlipPlan, heightScale: Double) -> Pose {
+    ///   - axisYaw: 翻转轴绕竖直方向转了多少度（P09，跟着手指上划的方向）。
+    ///     0 就是原来那样朝正前方翻。
+    static func pose(at t: Double, plan: FlipPlan, heightScale: Double,
+                     axisYaw: Double = 0) -> Pose {
         let total = Double(plan.halfTurns) * 180
+        let end = wobbleEnd(halfTurns: plan.halfTurns, axisYaw: axisYaw)
+        let side = turnSide(axisYaw: axisYaw)
 
         if t >= plan.endTime {
             return Pose(height: 0, degrees: total, tiltDegrees: 0,
-                        wobbleDegrees: wobbleEndDegrees, isFinished: true)
+                        wobbleDegrees: end, nutationDegrees: 0, isFinished: true)
         }
 
         return Pose(height: height(at: t, plan: plan) * heightScale,
                     degrees: degrees(at: t, plan: plan),
                     tiltDegrees: tilt(at: t, plan: plan),
-                    wobbleDegrees: wobble(at: t, plan: plan),
+                    wobbleDegrees: wobble(at: t, plan: plan, end: end, side: side),
+                    nutationDegrees: side * nutation(at: t, plan: plan),
                     isFinished: false)
     }
 
@@ -156,22 +168,58 @@ enum FlipAnimator {
         return (ascent + 0.5 * (1 - pow(1 - y, d + 1)) / (d + 1)) / whole
     }
 
+    // MARK: - 进动与章动（P09）
+
+    /// 飞行中翻转轴绕竖直方向一共转多少度（进动）。
+    ///
+    /// 真硬币几乎从来不绕一根固定的轴翻——轴自己也在慢慢转。
+    /// 加上它，空中就不再是"绕着一根杆子机械地翻"。
+    /// 只绕竖直方向转，所以不改变翻了几个半圈，也就不改变结果。
+    static let flightPrecessionDegrees: Double = 60
+
+    /// 飞行中翻转轴最多往竖直方向歪多少度（章动）。
+    /// 起飞、落地两头都是 0，中间最大——歪出去又正回来，结果不受影响。
+    static let nutationPeakDegrees: Double = 12
+
+    /// 第 t 秒翻转轴歪了多少度：只在飞行中有，两头为 0
+    private static func nutation(at t: Double, plan: FlipPlan) -> Double {
+        guard t < plan.landTime, plan.landTime > 0 else { return 0 }
+        return nutationPeakDegrees * sin(.pi * t / plan.landTime)
+    }
+
     // MARK: - 摇摆打转
 
     /// 第 t 秒绕竖直轴转了多少度。
     ///
-    /// 落地之后才开始：先慢慢转起来，中途最快，再缓缓收住。
+    /// 飞行中（P09）：从 0 开始慢慢起步，落地时转到 flightPrecessionDegrees。
+    /// 落地之后：从落地那一刻的转速接着走，中途最快，再缓缓收住，
+    /// 停在整圈上（wobbleEndDegrees）。
     ///
     /// 真硬币快停住时那阵打转其实是越来越快的，但照搬过来在屏幕上
     /// 会糊成一团，而且最后戛然而止很突兀。所以改成两头慢中间快，
     /// 转速最高不过每秒两圈，看得清是硬币在晃，收尾也自然。
     ///
     /// 它只是让歪斜的方向绕着圈走，不影响朝上的是哪一面。
-    private static func wobble(at t: Double, plan: FlipPlan) -> Double {
-        guard t > plan.landTime else { return 0 }
+    private static func wobble(at t: Double, plan: FlipPlan, end: Double, side: Double) -> Double {
+        let start = side * flightPrecessionDegrees
+        guard plan.landTime > 0 else { return 0 }
+
+        if t <= plan.landTime {
+            // 起步速度为 0，越转越快
+            let p = t / plan.landTime
+            return start * p * p
+        }
+
+        // 落地之后：三次曲线，起点接上落地时的位置和转速，终点停在整圈、速度为 0
         let p = settleProgress(at: t, plan: plan)
-        let eased = 3 * p * p - 2 * p * p * p      // 缓入缓出
-        return wobbleEndDegrees * eased
+        let settle = plan.endTime - plan.landTime
+        let landingSpeed = 2 * start / plan.landTime              // 度/秒
+        // 换算成"每走完一整段"的单位；封顶，保证一路只往前转、中途仍是最快
+        let m0 = side * min(abs(landingSpeed) * settle, abs(end - start))
+        let h00 = 2 * p * p * p - 3 * p * p + 1
+        let h10 = p * p * p - 2 * p * p + p
+        let h01 = -2 * p * p * p + 3 * p * p
+        return h00 * start + h10 * m0 + h01 * end
     }
 
     /// 打转一共转过多少度。
@@ -182,6 +230,26 @@ enum FlipAnimator {
     ///   取整之后，转完正好回到出发时的朝向，两边严丝合缝。
     static var wobbleEndDegrees: Double {
         FlipPlanner.wobbleTurns.rounded() * 360
+    }
+
+    /// 翻转轴转了 axisYaw 度时，打转要停在多少度，停稳那一刻才和躺平姿态对得上（P09）。
+    ///
+    /// ★ 斜着的轴翻奇数个半圈，硬币会多出一个 2 × axisYaw 的朝向。★
+    ///   （绕斜轴翻 180° = 先转到正轴、翻 180°、再转回来，一来一回朝向差了两倍。）
+    ///   打转把这一截补回来，停稳时就严丝合缝。偶数个半圈没有这一截。
+    ///   FlipAnimatorTests 里用四元数逐一核对了最后一帧和躺平姿态。
+    static func wobbleEnd(halfTurns: Int, axisYaw: Double) -> Double {
+        let correction = halfTurns % 2 == 1 ? -2 * axisYaw : 0
+        return turnSide(axisYaw: axisYaw) * wobbleEndDegrees + correction
+    }
+
+    /// 进动、章动、打转往哪边转：+1 或 −1，跟着手指划的方向镜像（P09）。
+    ///
+    /// ★ 左划必须正好是右划照镜子。★ 第一版固定朝一边转：
+    ///   往右划时进动把轴往回带、往左划时往外推，作者看着"左划右划飞行姿态不一样"。
+    ///   正上方（axisYaw = 0）沿用原来的方向。
+    static func turnSide(axisYaw: Double) -> Double {
+        axisYaw > 0 ? -1 : 1
     }
 
     /// 落地之后到停稳之间走了多少（0 到 1）

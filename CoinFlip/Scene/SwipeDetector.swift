@@ -39,6 +39,23 @@ enum SwipeDetector {
     /// 比上划那边严（上划是 1.3），因为斜着划更可能是想抛，不是想拨。
     static let maxVerticalRatio: Double = 0.8
 
+    // ── 翻转方向（P09）──
+
+    /// 上划偏离竖直方向最多算多少度。再歪的上划照样抛，只是翻转方向按这个封顶。
+    static let maxFlipAngle: Double = 50
+
+    /// 这一划往哪个方向翻（度）：0 是正上方，往右偏为正，往左偏为负。
+    ///
+    /// 用的是手指从按下到松开的整体方向，不是某一瞬间的速度方向——
+    /// 整体方向才是"你想往哪边抛"，瞬间方向会被手抖带偏。
+    static func flipDirection(translation: CGSize) -> Double {
+        let up = -Double(translation.height)
+        let side = Double(translation.width)
+        guard up > 0 else { return 0 }
+        let degrees = atan2(side, up) * 180 / .pi
+        return min(max(degrees, -maxFlipAngle), maxFlipAngle)
+    }
+
     /// 一次手势的判定结果
     enum Result: Equatable {
         /// 有效上划，附带峰值速度（点/秒）和往上划的距离（点），都是正数

@@ -56,6 +56,9 @@ struct RootView: View {
     /// 双指缩放中：两指距离相对起始的倍数。为空表示没在缩放（P07）
     @State private var pinchScale: CGFloat?
 
+    /// 这一次往哪个方向翻（度，0 是正上方，往右为正）。跟着手指上划的方向（P09）
+    @State private var flipDirection: Double = 0
+
     /// 声音与震动
     @State private var feedback = FeedbackPlayer()
 
@@ -75,7 +78,8 @@ struct RootView: View {
                 showsHint: controller.showsHint,
                 pinchScale: pinchScale,
                 // 双指松开、镜头吸到远景或特写那一下，轻轻"嗒"一声，和横拨同一种手感
-                onPinchSnap: { feedback.spinTick() }
+                onPinchSnap: { feedback.spinTick() },
+                flipDirection: flipDirection
             )
 
             // 透明手势板，盖在 3D 画面之上
@@ -110,6 +114,8 @@ struct RootView: View {
 
                     // 大脑说了算：抛掷中它会返回空，这一划就被忽略
                     if let plan = controller.requestFlip(speed: speed, distance: distance) {
+                        // 往哪边划就往哪边翻（只改翻的方向，不改翻几个半圈，结果不受影响）
+                        flipDirection = SwipeDetector.flipDirection(translation: drag.translation)
                         let now = Date()
                         flipStartedAt = now
 

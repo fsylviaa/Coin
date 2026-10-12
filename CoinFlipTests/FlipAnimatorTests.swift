@@ -132,10 +132,14 @@ final class FlipAnimatorTests: XCTestCase {
     }
 
     /// 落地后会在平面上打转：两头慢、中间最快，收尾要收住不能戛然而止
+    ///
+    /// P09 起飞行中也有一点进动，所以落地那一刻已经转过了 flightPrecessionDegrees
+    /// （原来这里断言"落地之前不该打转"，是加进动之前的样子）。
     func testWobbleEasesInAndOut() {
         let plan = makePlan()
         XCTAssertEqual(FlipAnimator.pose(at: plan.landTime, plan: plan, heightScale: scale)
-                        .wobbleDegrees, 0, accuracy: 1e-6, "落地之前不该打转")
+                        .wobbleDegrees, FlipAnimator.flightPrecessionDegrees, accuracy: 1e-6,
+                       "落地那一刻的进动角不对")
 
         let settle = plan.endTime - plan.landTime
         let step = settle / 20
@@ -294,6 +298,60 @@ final class FlipAnimatorTests: XCTestCase {
             fastest = max(fastest, d / step)
         }
         XCTAssertLessThan(fastest, 1000, "打转最快到了每秒 \(Int(fastest / 360)) 圈，太快了")
+    }
+
+    // MARK: - 进动与章动（P09）
+
+    /// 进动从 0 慢慢起步：刚脱手时不能一下子转起来
+    func testPrecessionStartsGently() {
+        let plan = makePlan()
+        XCTAssertEqual(FlipAnimator.pose(at: 0, plan: plan, heightScale: scale).wobbleDegrees,
+                       0, accuracy: 1e-9)
+        let early = FlipAnimator.pose(at: plan.landTime * 0.1, plan: plan, heightScale: scale)
+            .wobbleDegrees
+        XCTAssertLessThan(early, FlipAnimator.flightPrecessionDegrees * 0.02, "起步太猛")
+    }
+
+    /// ★ 落地那一刻转速接得上 ★：空中的进动和落地后的打转是同一个动作，不能有顿挫
+    func testPrecessionFlowsIntoWobble() {
+        for speed in [400.0, 1500.0, 3000.0] {
+            let plan = makePlan(speed: speed)
+            let h = 1.0 / 600
+            func at(_ t: Double) -> Double {
+                FlipAnimator.pose(at: t, plan: plan, heightScale: scale).wobbleDegrees
+            }
+            let before = (at(plan.landTime) - at(plan.landTime - h)) / h
+            let after = (at(plan.landTime + h) - at(plan.landTime)) / h
+            XCTAssertEqual(after, before, accuracy: max(before * 0.1, 5),
+                           "速度 \(Int(speed))：落地那一刻打转的速度断了（前 \(Int(before))°/s，后 \(Int(after))°/s）")
+        }
+    }
+
+    /// 打转一路只往一个方向转，不会倒回去
+    func testWobbleNeverReverses() {
+        for speed in [400.0, 1500.0, 3000.0] {
+            let plan = makePlan(speed: speed)
+            var last = -1.0
+            for i in 0...200 {
+                let t = plan.endTime * Double(i) / 200
+                let w = FlipAnimator.pose(at: t, plan: plan, heightScale: scale).wobbleDegrees
+                XCTAssertGreaterThanOrEqual(w, last - 1e-9, "速度 \(Int(speed))：打转倒着走了")
+                last = w
+            }
+        }
+    }
+
+    /// 章动只在飞行中有，起飞和落地那一刻都是 0——所以最后朝上的面不受影响
+    func testNutationVanishesAtBothEnds() {
+        let plan = makePlan()
+        func n(_ t: Double) -> Double {
+            FlipAnimator.pose(at: t, plan: plan, heightScale: scale).nutationDegrees
+        }
+        XCTAssertEqual(n(0), 0, accuracy: 1e-9)
+        XCTAssertEqual(n(plan.landTime), 0, accuracy: 1e-6)
+        XCTAssertEqual(n((plan.landTime + plan.endTime) / 2), 0, accuracy: 1e-9)
+        XCTAssertGreaterThan(n(plan.landTime / 2), 0)
+        XCTAssertLessThanOrEqual(n(plan.landTime / 2), FlipAnimator.nutationPeakDegrees + 1e-9)
     }
 
     /// 打转只绕竖直轴，不会把朝上的那一面转掉

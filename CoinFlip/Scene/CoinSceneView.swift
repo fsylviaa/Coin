@@ -303,6 +303,11 @@ final class CoinSceneState {
     /// 减少动态效果下，用户自己捏到了特写（镜头平时一律停在远景）
     var pinchChoseNear = false
     var onPinchSnap: () -> Void = {}
+
+    // ── 翻转方向（P09）──
+    /// 这一次往哪个方向翻。★ 必须经过这个盒子 ★——每帧回调是搭场景时挂上的，
+    /// 直接读视图上的 flipDirection 永远是当时的 0（第一版就栽在这里，作者看着"没有任何变化"）
+    var flipDirection: Double = 0
 }
 
 struct CoinSceneView: View {
@@ -338,6 +343,27 @@ struct CoinSceneView: View {
     var pinchScale: CGFloat? = nil
     /// 松手后镜头吸到位的那一下
     var onPinchSnap: () -> Void = {}
+
+    /// 这一次往哪个方向翻（度，0 是正上方，往右为正）。跟着手指上划的方向（P09）
+    var flipDirection: Double = 0
+
+    /// 屏幕上往右偏 ψ 度 → 翻转轴绕竖直方向转多少度。
+    ///
+    /// 镜头从 +z 方向、离地 28° 斜着看过去：屏幕右边是 +x，屏幕上方是地面的 −z，
+    /// 但地面在屏幕上被压扁了（压成 sin 28° ≈ 0.47 倍）。
+    /// ★ 所以要先把透视折算掉。★ 第一版直接把手指角度照搬到地面上，
+    ///   划 45° 屏幕上看着像 65°，作者看着"没有跟划动角度一致"。
+    /// 折算后，屏幕上看到的翻转方向 = 手指划的方向（FlipDirectionTests 核对过）。
+    static func axisYaw(forFlipDirection direction: Double) -> Double {
+        let squash = sin(Double(CoinScene.elevationFar) * .pi / 180)
+        let ground = atan(tan(direction * .pi / 180) * squash) * 180 / .pi
+        return -ground
+    }
+
+    /// 翻滚的方向：−1 = 靠近镜头的那一边先翘起来，往屏幕里面翻过去（作者要的）。
+    /// 原来是 +1：远端先翘起来、朝镜头翻过来。
+    /// 只改翻的方向，不改翻几个半圈，所以结果不受影响。
+    static let tumbleSign: Float = -1
 
     @State private var state = CoinSceneState()
 
@@ -429,6 +455,7 @@ struct CoinSceneView: View {
 
             // 双指缩放（P07）：开始时记下镜头位置，松开时决定吸到远景还是特写
             state.onPinchSnap = onPinchSnap
+            state.flipDirection = flipDirection
             if let scale = pinchScale {
                 if !state.pinching {
                     state.pinching = true
@@ -575,15 +602,33 @@ struct CoinSceneView: View {
         let before = state.restYaw
 
         if state.dragging {
-            // 跟手：手指划到哪，硬币就转到哪。以按下那一刻的角度为基准
+            // 跟手：手指划到哪，硬币就转到哪。以按下那一刻的角度为基准。
+            // ★ 只在"像在拨"的时候跟着转（P09）。★ 斜着往上划要抛时，手指也在横向走，
+            //   原来硬币会先原地拧一截、脱手又被清零再斜着翻，作者看着"跟横拨打架"。
+            let follow = Self.spinFollowWeight(dragUp: state.dragUp, dragSide: state.dragSide)
             state.restYaw = state.yawAtTouchDown
-                + Float(state.dragSide) * CoinScene.spinPerPoint
+                + Float(state.dragSide) * CoinScene.spinPerPoint * follow
         } else if state.spinVelocity != 0 {
             state.restYaw += state.spinVelocity * Float(dt)
             state.spinVelocity = Self.decayedSpin(state.spinVelocity, dt: dt)
         }
 
         tickSpin(turned: abs(state.restYaw - before), now: now)
+    }
+
+    /// 拖动中硬币跟着手指原地转几成（0~1），看手指的大方向（P09）。
+    ///
+    /// 离竖直方向 50° 以内是在往上划（要抛）：完全不转；
+    /// 越接近横着走越像在拨，65° 以外完全跟手；中间平滑过渡。
+    /// 这和松手时判"抛还是拨"用的是同一套角度（上划最多歪约 52°，横拨从约 51° 起），
+    /// 两边不再互相打架。
+    static func spinFollowWeight(dragUp: CGFloat, dragSide: CGFloat) -> Float {
+        let side = abs(Double(dragSide))
+        let up = max(Double(dragUp), 0)
+        guard side > 0 else { return 0 }
+        let fromVertical = atan2(side, up) * 180 / .pi
+        let x = min(max((fromVertical - 50) / 15, 0), 1)
+        return Float(x * x * (3 - 2 * x))
     }
 
     /// 角速度随时间衰减。转得越久越慢，慢到一定程度就直接停住。
@@ -869,8 +914,10 @@ struct CoinSceneView: View {
                 return
             }
 
+            let axisYaw = Self.axisYaw(forFlipDirection: state.flipDirection)
             let pose = FlipAnimator.pose(at: t, plan: plan,
-                                         heightScale: Double(CoinScene.heightScale))
+                                         heightScale: Double(CoinScene.heightScale),
+                                         axisYaw: axisYaw)
 
             // 脱手时硬币已经被提到 launchLift，飞行曲线要从那里接上，
             // 否则会看到硬币先"掉"回地面再飞起来。
@@ -906,7 +953,9 @@ struct CoinSceneView: View {
                 coin.transform.rotation = Self.flightRotation(
                     startFace: plan.startFace,
                     degrees: Float(pose.degrees),
-                    wobbleDegrees: Float(pose.wobbleDegrees)
+                    wobbleDegrees: Float(pose.wobbleDegrees),
+                    nutationDegrees: Float(pose.nutationDegrees),
+                    axisYawDegrees: Float(axisYaw)
                 )
             }
 
@@ -934,8 +983,15 @@ struct CoinSceneView: View {
         //   和当初落地时突然扭 72 度是同一个坑。
         //   它绕的是竖直轴，所以只改朝向，不改朝上的是哪一面。
         let yaw = simd_quatf(angle: state.restYaw * .pi / 180, axis: [0, 1, 0])
+        // 掀起的方向要和翻滚方向一致（P09）：
+        //   • 往里翻，所以掀起的是靠近镜头的那一边
+        //   • 往哪边斜着提，就朝哪边掀——和脱手后翻出去的方向是同一根轴，接得上
+        let direction = SwipeDetector.flipDirection(
+            translation: CGSize(width: state.dragSide, height: -state.dragUp))
+        let axisYaw = Float(Self.axisYaw(forFlipDirection: direction)) * .pi / 180
+        let axis = simd_quatf(angle: axisYaw, axis: [0, 1, 0]).act([1, 0, 0])
         coin.transform.rotation = yaw
-            * simd_quatf(angle: tilt, axis: [1, 0, 0])
+            * simd_quatf(angle: Self.tumbleSign * tilt, axis: axis)
             * Self.restingRotation(for: face)
     }
 
@@ -963,9 +1019,18 @@ struct CoinSceneView: View {
     /// 绕竖直轴转不会改变朝上的是哪一面，所以不影响结果。
     static func flightRotation(startFace: CoinFace,
                                degrees: Float,
-                               wobbleDegrees: Float) -> simd_quatf {
-        let tumble = simd_quatf(angle: (baseAngle(for: startFace) + degrees) * .pi / 180,
-                                axis: [1, 0, 0])
+                               wobbleDegrees: Float,
+                               nutationDegrees: Float = 0,
+                               axisYawDegrees: Float = 0) -> simd_quatf {
+        // 翻转轴本来是水平朝左右的；章动（P09）让它在飞行中往竖直方向歪一点再正回来，
+        // 再整根绕竖直方向转 axisYaw，硬币就朝手指划的方向翻。
+        let n = nutationDegrees * .pi / 180
+        let yaw = simd_quatf(angle: axisYawDegrees * .pi / 180, axis: [0, 1, 0])
+        let axis = yaw.act(simd_normalize(SIMD3<Float>(cos(n), sin(n), 0)))
+        // 先摆成抛之前躺着的样子，再绕这根轴翻 degrees。
+        // 轴是正左右方向时，这和原来"绕横轴转 起始角 + degrees"完全一样。
+        let resting = simd_quatf(angle: baseAngle(for: startFace) * .pi / 180, axis: [1, 0, 0])
+        let tumble = simd_quatf(angle: tumbleSign * degrees * .pi / 180, axis: axis) * resting
         let spin = simd_quatf(angle: wobbleDegrees * .pi / 180, axis: [0, 1, 0])
         return spin * tumble
     }
