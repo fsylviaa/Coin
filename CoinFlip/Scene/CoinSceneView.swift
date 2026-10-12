@@ -123,6 +123,25 @@ enum CoinScene {
     static let driftElevation: Float = 2.0       // 高低游移幅度（度）
     static let driftYawPeriod: Double = 13.0
     static let driftElevationPeriod: Double = 9.0
+
+    // 远景的呼吸感（P05）。只在"远景、没人碰"的时候有，其余时候缓缓收掉。
+    //
+    // ★ 全部靠"每帧转一点点"实现，不换材质。★ 换材质正是以前卡顿的地方。
+    //
+    // A 高光流动：硬币倒映的那个环境（night_env）极慢地来回转，
+    //   币面上的高光就像有人在旁边缓缓移动台灯。硬币本身一动不动。
+    static let breathEnvYaw: Float = 18          // 左右转多少度
+    static let breathEnvYawPeriod: Double = 14.0
+    static let breathEnvTilt: Float = 6          // 上下俯仰多少度，和左右错开节奏，流得更自然
+    static let breathEnvTiltPeriod: Double = 11.0
+    // 银河流转：背景在原有位置上再极慢地漂一点，像夜空在缓缓转动。
+    // ★ 幅度不能大 ★ 星空只铺了镜头看得到的那一片，左右余量约 8°（见 StarField.Patch）
+    static let skyDriftYaw: Float = 3
+    static let skyDriftYawPeriod: Double = 40.0
+    static let skyDriftTilt: Float = 1.5
+    static let skyDriftTiltPeriod: Double = 31.0
+    /// 呼吸感从有到无（或反过来）要多久。一抛起来就缓缓收掉，不是戛然而止
+    static let breathFadeSeconds: Double = 1.2
 }
 
 /// 甩出去的那一拨。
@@ -213,6 +232,17 @@ final class CoinSceneState {
     /// 背景此刻转动的速度（度/秒）。弹簧式地追，需要记住速度
     var skyElevationSpeed: Float = 0
     var skyYawSpeed: Float = 0
+
+    // ── 远景与呼吸（P05）──
+    /// 冷启动后停在远景，直到第一次抛出。抛过之后揭晓时才推成特写
+    var holdFar = true
+    /// 硬币倒映的环境光，转它就是"高光流动"
+    var environmentLight: Entity?
+    /// 呼吸感此刻有几成（0~1）。远景没人碰时慢慢升到 1，其余时候慢慢落回 0
+    var breath: Float = 0
+    /// 呼吸的时钟，从 App 打开算起。用它而不是"进入远景的时刻"，
+    /// 呼吸收掉再回来时相位接得上
+    let breathStart = Date()
 }
 
 struct CoinSceneView: View {
@@ -277,7 +307,9 @@ struct CoinSceneView: View {
 
             // 环境反射。读不出来就跳过，硬币仍由上面那组灯照亮。
             if let environment = await StudioEnvironment.load() {
-                content.add(StudioEnvironment.makeLight(environment, for: coin))
+                let light = StudioEnvironment.makeLight(environment, for: coin)
+                content.add(light)
+                state.environmentLight = light
             }
 
             // 跟着画面刷新走：每画一帧，系统就调一次这里。
@@ -291,6 +323,8 @@ struct CoinSceneView: View {
                 // 刚从抛掷切回等待，呼吸要从头开始，不然会突然跳一下
                 if case .waiting = phase { state.idleSince = Date() }
                 if case .flipping = phase {
+                    // 抛过一次之后，揭晓时就推成特写了（冷启动那段远景到此为止）
+                    state.holdFar = false
                     // 脱手这一刻硬币已经被手指提到一定高度，
                     // 记下来，飞行曲线要从这里接上，不能从地面重新开始。
                     state.launchLift = state.lift
@@ -527,7 +561,8 @@ struct CoinSceneView: View {
             if Self.reduceMotion { return 0 }
             // 手指一按住往上带，就先退回常态景别，给接下来的抛掷腾出空间
             if state.dragUp > 10 { return 0 }
-            if case .resting = state.phase { return 1 }
+            // 冷启动：停在远景，看着硬币躺在银河上；抛过一次之后才推近揭晓（P05）
+            if case .resting = state.phase { return state.holdFar ? 0 : 1 }
             // 不等彻底停稳就开始抬镜头。摇摆的最后那一段幅度已经很小，
             // 非要等它走完，画面上就会空出一拍，像卡住了。
             if case .flipping(let plan) = state.phase, let startedAt = state.startedAt {
@@ -548,14 +583,19 @@ struct CoinSceneView: View {
         let lookUp = lerp(CoinScene.lookUpFar, CoinScene.lookUpNear, z)
         var yaw: Float = 0
 
-        // 等待时让镜头极缓慢地游移，画面不至于死板。
+        // 远景、没人碰的时候：镜头极缓慢地游移 + 呼吸（P05）。
+        // 原来只在"等待"时游移，并且一抛就戛然而止；现在按呼吸的权重缓缓收放，
+        // 冷启动停在远景的那段也有。
         // 减少动态效果下这一项也要停——持续不断的缓慢移动正是最容易引起不适的那种
-        if case .waiting = state.phase, !Self.reduceMotion {
+        updateBreath(dt: dt)
+        if state.breath > 0 {
             let e = now.timeIntervalSince(state.idleSince)
-            yaw = CoinScene.driftYaw * Float(sin(e * 2 * .pi / CoinScene.driftYawPeriod))
-            elevation += CoinScene.driftElevation
+            yaw = state.breath * CoinScene.driftYaw
+                * Float(sin(e * 2 * .pi / CoinScene.driftYawPeriod))
+            elevation += state.breath * CoinScene.driftElevation
                 * Float(sin(e * 2 * .pi / CoinScene.driftElevationPeriod + 0.7))
         }
+        breatheEnvironment(now: now)
 
         let er = elevation * .pi / 180
         let yr = yaw * .pi / 180
@@ -569,6 +609,47 @@ struct CoinSceneView: View {
         camera.look(at: lookAt, from: position, relativeTo: nil)
 
         updateSky(cameraElevation: elevation, cameraYaw: yaw, dt: dt)
+    }
+
+    /// 现在算不算"远景、没人碰"：这时才有游移和呼吸
+    private var isIdleFar: Bool {
+        if Self.reduceMotion || state.dragging || state.dragUp > 10 { return false }
+        switch state.phase {
+        case .waiting: return true
+        case .resting: return state.holdFar
+        case .flipping: return false
+        }
+    }
+
+    /// 呼吸感的权重缓缓追向目标：进远景慢慢起来，一抛就慢慢收掉，都不突兀
+    private func updateBreath(dt: Double) {
+        let target: Float = isIdleFar ? 1 : 0
+        let k = Float(1 - exp(-dt / max(CoinScene.breathFadeSeconds / 3, 0.0001)))
+        state.breath += (target - state.breath) * k
+        if state.breath < 0.0005 && target == 0 { state.breath = 0 }
+    }
+
+    /// A 高光流动：转硬币倒映的那个环境，币面高光就缓缓流过去（P05）
+    private func breatheEnvironment(now: Date) {
+        guard let light = state.environmentLight else { return }
+        let t = now.timeIntervalSince(state.breathStart)
+        let yaw = state.breath * CoinScene.breathEnvYaw
+            * Float(sin(t * 2 * .pi / CoinScene.breathEnvYawPeriod))
+        let tilt = state.breath * CoinScene.breathEnvTilt
+            * Float(sin(t * 2 * .pi / CoinScene.breathEnvTiltPeriod + 1.3))
+        light.orientation = simd_quatf(angle: yaw * .pi / 180, axis: [0, 1, 0])
+            * simd_quatf(angle: tilt * .pi / 180, axis: [1, 0, 0])
+    }
+
+    /// 银河流转：在背景原有朝向上再叠一点极慢的漂移（P05）
+    private func skyDrift(now: Date) -> simd_quatf {
+        let t = now.timeIntervalSince(state.breathStart)
+        let yaw = state.breath * CoinScene.skyDriftYaw
+            * Float(sin(t * 2 * .pi / CoinScene.skyDriftYawPeriod))
+        let tilt = state.breath * CoinScene.skyDriftTilt
+            * Float(sin(t * 2 * .pi / CoinScene.skyDriftTiltPeriod + 2.1))
+        return simd_quatf(angle: yaw * .pi / 180, axis: [0, 1, 0])
+            * simd_quatf(angle: tilt * .pi / 180, axis: [1, 0, 0])
     }
 
     /// 背景慢半拍地追着镜头走（P02）。
@@ -603,7 +684,7 @@ struct CoinSceneView: View {
             state.skyElevation = target.elevation
             state.skyYaw = target.yaw
         }
-        sky.orientation = StarField.orientation(cameraElevation: cameraElevation,
+        sky.orientation = skyDrift(now: Date()) * StarField.orientation(cameraElevation: cameraElevation,
                                                 cameraYaw: cameraYaw,
                                                 seenElevation: state.skyElevation ?? target.elevation,
                                                 seenYaw: state.skyYaw)

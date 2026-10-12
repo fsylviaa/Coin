@@ -16,9 +16,12 @@ final class StarFieldTests: XCTestCase {
     /// 每个位置看屏幕的四角和四边中点，算出视线打到星空球面上的哪里。
     /// 以后要是调大了镜头角度或视野，这里会先红，提醒 StarField.Patch 跟着放大。
     func testCameraNeverSeesPastTheStars() {
-        let elevations = stride(from: CoinScene.elevationFar - CoinScene.driftElevation - 1,
-                                through: CoinScene.elevationNear + 2, by: 1)
-        let yaws: [Float] = [-CoinScene.driftYaw - 0.5, 0, CoinScene.driftYaw + 0.5]
+        // 银河流转（P05）会让背景再多漂一点，等于镜头多偏了这么多，一并算进去
+        let elevations = stride(from: CoinScene.elevationFar - CoinScene.driftElevation
+                                    - CoinScene.skyDriftTilt - 1,
+                                through: CoinScene.elevationNear + CoinScene.skyDriftTilt + 2, by: 1)
+        let sway = CoinScene.driftYaw + CoinScene.skyDriftYaw + 0.5
+        let yaws: [Float] = [-sway, 0, sway]
         let tanV = tan(CoinScene.fieldOfView / 2 * .pi / 180)
         // 竖屏宽高比约 0.46，取 0.5 留点余量
         let tanH = tanV * 0.5
