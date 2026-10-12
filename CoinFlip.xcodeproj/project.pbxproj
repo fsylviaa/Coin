@@ -259,8 +259,8 @@
 				DEVELOPMENT_TEAM = PBPUW6L86S;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Coin";
-				INFOPLIST_KEY_CFBundleName = "抛硬币";
+				INFOPLIST_KEY_CFBundleDisplayName = "Coin P";
+				INFOPLIST_KEY_CFBundleName = "抛硬币 P";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;
 				INFOPLIST_KEY_UIStatusBarHidden = YES;
@@ -269,7 +269,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.antheafsy.coinflip;
+				PRODUCT_BUNDLE_IDENTIFIER = com.antheafsy.coinflip.polish;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -285,8 +285,8 @@
 				DEVELOPMENT_TEAM = PBPUW6L86S;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Coin";
-				INFOPLIST_KEY_CFBundleName = "抛硬币";
+				INFOPLIST_KEY_CFBundleDisplayName = "Coin P";
+				INFOPLIST_KEY_CFBundleName = "抛硬币 P";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;
 				INFOPLIST_KEY_UIStatusBarHidden = YES;
@@ -295,7 +295,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.antheafsy.coinflip;
+				PRODUCT_BUNDLE_IDENTIFIER = com.antheafsy.coinflip.polish;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				TARGETED_DEVICE_FAMILY = 1;
