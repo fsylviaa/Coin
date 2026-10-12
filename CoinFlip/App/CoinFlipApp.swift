@@ -53,6 +53,9 @@ struct RootView: View {
     /// 这一次手势有没有预热过震动器。手指一动就预热，脱手那一帧就不用再忙了。
     @State private var warmedUp = false
 
+    /// 双指缩放中：两指距离相对起始的倍数。为空表示没在缩放（P07）
+    @State private var pinchScale: CGFloat?
+
     /// 声音与震动
     @State private var feedback = FeedbackPlayer()
 
@@ -69,7 +72,10 @@ struct RootView: View {
                 dragging: dragging,
                 spinImpulse: spinImpulse,
                 onSpinTick: { feedback.spinTick() },
-                showsHint: controller.showsHint
+                showsHint: controller.showsHint,
+                pinchScale: pinchScale,
+                // 双指松开、镜头吸到远景或特写那一下，轻轻"嗒"一声，和横拨同一种手感
+                onPinchSnap: { feedback.spinTick() }
             )
 
             // 透明手势板，盖在 3D 画面之上
@@ -131,6 +137,17 @@ struct RootView: View {
                     spinImpulse = SpinImpulse(sideSpeed: speed)
                 }
                 // 两样都不算：硬币会自己缓缓落回平面
+            } onDragCancelled: {
+                // 第二根手指落下：前面那根手指的拖动整个作废——不抛、不拨，
+                // 硬币缓缓落回原处（P07）
+                dragUp = 0
+                dragSide = 0
+                dragging = false
+                warmedUp = false
+            } onPinchChanged: { scale in
+                pinchScale = scale
+            } onPinchEnded: {
+                pinchScale = nil
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea()

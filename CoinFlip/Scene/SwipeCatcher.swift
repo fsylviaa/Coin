@@ -40,18 +40,34 @@ struct SwipeCatcher: UIViewRepresentable {
     /// 算不算上划、算不算横拨，由调用方交给 SwipeDetector 判断，这里不做判断。
     var onDragEnded: (DragOutcome) -> Void
 
+    // ── 双指缩放（P07）──
+    /// 第二根手指落下：前面那根手指的拖动作废（不抛、不拨），硬币落回原处
+    var onDragCancelled: () -> Void = {}
+    /// 双指捏合中持续调用：两指距离 ÷ 刚放下第二根手指时的距离（张开 > 1，捏合 < 1）
+    var onPinchChanged: (CGFloat) -> Void = { _ in }
+    /// 双指里任何一根抬起：这次缩放结束
+    var onPinchEnded: () -> Void = {}
+
     func makeUIView(context: Context) -> TouchTrackingView {
         let view = TouchTrackingView()
         view.backgroundColor = .clear
         view.isUserInteractionEnabled = true
-        view.onDragChanged = onDragChanged
-        view.onDragEnded = onDragEnded
+        // ★ 必须打开，否则第二根手指根本收不到（UIView 默认只认一根）★
+        view.isMultipleTouchEnabled = true
+        apply(to: view)
         return view
     }
 
     func updateUIView(_ uiView: TouchTrackingView, context: Context) {
-        uiView.onDragChanged = onDragChanged
-        uiView.onDragEnded = onDragEnded
+        apply(to: uiView)
+    }
+
+    private func apply(to view: TouchTrackingView) {
+        view.onDragChanged = onDragChanged
+        view.onDragEnded = onDragEnded
+        view.onDragCancelled = onDragCancelled
+        view.onPinchChanged = onPinchChanged
+        view.onPinchEnded = onPinchEnded
     }
 
     /// 明确告诉系统：外面给多大，这块板子就占多大。
@@ -69,6 +85,27 @@ final class TouchTrackingView: UIView {
 
     var onDragChanged: ((CGSize) -> Void)?
     var onDragEnded: ((DragOutcome) -> Void)?
+    var onDragCancelled: (() -> Void)?
+    var onPinchChanged: ((CGFloat) -> Void)?
+    var onPinchEnded: (() -> Void)?
+
+    // ── 双指（P07）──
+    //
+    // 两根手指不可能同时落下，总有一根先到。先到的那根当普通拖动处理；
+    // 第二根一落下，就把前面的拖动整个作废，转成缩放。
+    // 缩放结束后，要等所有手指都离开才接受新的拖动——
+    // 不然捏完先抬一根、剩下那根一动，会被当成一次上划把硬币抛出去。
+
+    /// 第一根手指。拖动只认它，不认 touches.first（多指时 first 不一定是它）
+    private var primary: UITouch?
+    /// 第二根手指。有它就是在缩放
+    private var secondary: UITouch?
+    /// 第二根手指刚落下时两指的距离
+    private var pinchStartDistance: CGFloat = 1
+    /// 缩放结束后，等所有手指离开之前不再理会
+    private var waitingForAllUp = false
+    /// 屏幕上此刻按着的所有手指
+    private var active = Set<UITouch>()
 
     /// 算一小段速度时，跨多长时间取样（秒）。
     /// 太短会被手抖放大，太长会把快慢抹平。
@@ -79,15 +116,38 @@ final class TouchTrackingView: UIView {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
-        guard let touch = touches.first else { return }
-        startPoint = touch.location(in: self)
-        samples = [(startPoint, touch.timestamp)]
-        onDragChanged?(.zero)
+        active.formUnion(touches)
+        guard !waitingForAllUp else { return }
+
+        for touch in touches {
+            if primary == nil {
+                // 第一根：普通拖动
+                primary = touch
+                startPoint = touch.location(in: self)
+                samples = [(startPoint, touch.timestamp)]
+                onDragChanged?(.zero)
+            } else if secondary == nil {
+                // 第二根：前面的拖动作废，转成缩放
+                secondary = touch
+                samples = []
+                onDragCancelled?()
+                pinchStartDistance = max(currentPinchDistance(), 1)
+                onPinchChanged?(1)
+            }
+            // 第三根及以后：不理会
+        }
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesMoved(touches, with: event)
-        guard let touch = touches.first else { return }
+        guard !waitingForAllUp else { return }
+
+        if secondary != nil {
+            onPinchChanged?(currentPinchDistance() / pinchStartDistance)
+            return
+        }
+
+        guard let touch = primary, touches.contains(touch) else { return }
         let point = touch.location(in: self)
         samples.append((point, touch.timestamp))
         if samples.count > 80 { samples.removeFirst(samples.count - 80) }
@@ -99,17 +159,49 @@ final class TouchTrackingView: UIView {
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesEnded(touches, with: event)
-        finish(touches)
+        lifted(touches)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesCancelled(touches, with: event)
-        finish(touches)
+        lifted(touches)
     }
 
-    private func finish(_ touches: Set<UITouch>) {
+    private func lifted(_ touches: Set<UITouch>) {
+        active.subtract(touches)
+        defer {
+            // 所有手指都离开了：一切归零，下一次从头来
+            if active.isEmpty {
+                primary = nil
+                secondary = nil
+                waitingForAllUp = false
+            }
+        }
+        guard !waitingForAllUp else { return }
+
+        if let a = primary, let b = secondary,
+           touches.contains(a) || touches.contains(b) {
+            // 缩放中抬起任何一根：缩放结束，剩下的手指在全部离开前都不算数
+            onPinchEnded?()
+            waitingForAllUp = true
+            return
+        }
+
+        if let touch = primary, touches.contains(touch) {
+            finish(touch)
+            primary = nil
+        }
+    }
+
+    /// 两根手指此刻的距离
+    private func currentPinchDistance() -> CGFloat {
+        guard let a = primary, let b = secondary else { return 1 }
+        let p = a.location(in: self), q = b.location(in: self)
+        return hypot(p.x - q.x, p.y - q.y)
+    }
+
+    private func finish(_ touch: UITouch) {
         defer { samples = [] }
-        guard let touch = touches.first else { return }
 
         let endPoint = touch.location(in: self)
         let endTime = touch.timestamp

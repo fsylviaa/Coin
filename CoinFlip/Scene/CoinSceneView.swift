@@ -52,6 +52,30 @@ enum CoinScene {
     /// 悄悄换景，要慢、两头都软
     static let idlePullBackSeconds: Double = 2.6
 
+    /// 双指张开到原来的几倍，镜头从远景一路推到特写（P07）。
+    /// 用对数换算：张开一倍和捏回一半走的距离一样，手感对称
+    static let pinchFullRange: Double = 2.0
+    /// 双指松开后吸到远景或特写，大约多久停稳。
+    ///
+    /// ★ 用不过冲的弹簧，接着松手那一刻的速度往下走。★
+    ///   第一版用"每帧靠近一点"、从零速度重新起步，松手时手指的速度断了一截，
+    ///   加上捏到头时硬停，作者看着"躺下的那一刻、特写的那一刻停得太突然"。
+    static let pinchSnapSeconds: Double = 0.7
+    static var pinchSnapRate: Double { 4.7 / pinchSnapSeconds }
+
+    /// 捏到头之后还能再"拉过去"多少（推近程度的单位）。
+    /// 越往外越拉不动，像 iPhone 列表拉到顶的橡皮筋，松手再软软弹回来。
+    static let pinchOvershoot: Double = 0.06
+
+    /// 双指缩放中，镜头推近的程度（0 远景 ~ 1 特写，两头各有一点橡皮筋余量）
+    static func pinchZoom(from start: Double, scale: Double) -> Double {
+        let raw = start + log(max(scale, 0.01)) / log(pinchFullRange)
+        let m = pinchOvershoot
+        if raw > 1 { return 1 + m * (1 - exp(-(raw - 1) / m)) }
+        if raw < 0 { return -m * (1 - exp(raw / m)) }
+        return raw
+    }
+
     /// 自动退回远景时，第 elapsed 秒镜头推近的程度（1 特写 → 0 远景）。
     ///
     /// ★ 用两头都软的曲线，不用"每帧靠近一点"。★ 后者一开始最快，
@@ -266,6 +290,19 @@ final class CoinSceneState {
     /// 正在自动退回远景：从什么时候开始、当时推近到几成。为空表示没在退
     var pullBackStart: Date?
     var pullBackFrom: Double = 1
+
+    // ── 双指缩放（P07）──
+    var pinching = false
+    var pinchScale: Double = 1
+    /// 第二根手指落下那一刻镜头推近到几成，缩放从这里接着走
+    var pinchZoomStart: Double = 0
+    /// 松手后正在吸向远景或特写；吸到位时轻震一下
+    var pinchSnapping = false
+    /// 镜头推近程度此刻的变化速度（每秒）。缩放中一路量着，松手后弹簧接着它走
+    var zoomSpeed: Double = 0
+    /// 减少动态效果下，用户自己捏到了特写（镜头平时一律停在远景）
+    var pinchChoseNear = false
+    var onPinchSnap: () -> Void = {}
 }
 
 struct CoinSceneView: View {
@@ -296,6 +333,11 @@ struct CoinSceneView: View {
 
     /// 要不要放首次上划引导
     var showsHint: Bool = false
+
+    /// 双指缩放中两指距离的倍数，为空表示没在缩放（P07）
+    var pinchScale: CGFloat? = nil
+    /// 松手后镜头吸到位的那一下
+    var onPinchSnap: () -> Void = {}
 
     @State private var state = CoinSceneState()
 
@@ -361,6 +403,8 @@ struct CoinSceneView: View {
                 state.finishReported = false
                 state.lastActivity = Date()
                 state.pullBackStart = nil
+                state.pinchChoseNear = false
+                state.pinchSnapping = false     // 吸附途中直接抛了：交还给平常的镜头，不再补那一下轻震
             }
             state.startedAt = startedAt
             state.onFinished = onFinished
@@ -381,6 +425,29 @@ struct CoinSceneView: View {
             if let impulse = spinImpulse, impulse.at != state.lastImpulseAt {
                 state.lastImpulseAt = impulse.at
                 state.spinVelocity = impulse.degreesPerSecond
+            }
+
+            // 双指缩放（P07）：开始时记下镜头位置，松开时决定吸到远景还是特写
+            state.onPinchSnap = onPinchSnap
+            if let scale = pinchScale {
+                if !state.pinching {
+                    state.pinching = true
+                    state.pinchZoomStart = state.zoom
+                    state.pullBackStart = nil
+                    state.pinchSnapping = false
+                    state.zoomSpeed = 0
+                }
+                state.pinchScale = Double(scale)
+            } else if state.pinching {
+                state.pinching = false
+                if case .resting = state.phase {
+                    // 过了一半就吸到特写，不到一半就吸回远景
+                    let near = state.zoom >= 0.5
+                    state.holdFar = !near
+                    state.pinchChoseNear = near
+                    state.pinchSnapping = true
+                }
+                state.lastActivity = Date()
             }
 
             // 引导一直放到成功抛出第一次为止。
@@ -584,8 +651,11 @@ struct CoinSceneView: View {
         checkIdlePullBack(now: now)
 
         let target: Double = {
-            // 减少动态效果：镜头始终不动
-            if Self.reduceMotion { return 0 }
+            // 减少动态效果：镜头不自己动；只有用户自己双指捏到特写时才停在特写（P07）
+            if Self.reduceMotion {
+                if case .resting = state.phase, state.pinchChoseNear { return 1 }
+                return 0
+            }
             // 手指一按住往上带，就先退回常态景别，给接下来的抛掷腾出空间
             if state.dragUp > 10 { return 0 }
             // 冷启动：停在远景，看着硬币躺在银河上；抛过一次之后才推近揭晓（P05）
@@ -599,7 +669,28 @@ struct CoinSceneView: View {
             return 0
         }()
 
-        if let start = state.pullBackStart {
+        if state.pinching, case .resting = state.phase {
+            // 双指缩放中：镜头直接跟着手指走，不经过平滑（P07）。
+            // 顺便量着速度，松手后弹簧要接着这个速度走，不能断档
+            let next = CoinScene.pinchZoom(from: state.pinchZoomStart, scale: state.pinchScale)
+            if dt > 0 {
+                state.zoomSpeed = 0.6 * state.zoomSpeed + 0.4 * (next - state.zoom) / dt
+            }
+            state.zoom = next
+        } else if state.pinchSnapping {
+            // 松手后：不过冲的弹簧，从松手那一刻的速度起步，慢慢软着陆
+            let w = CoinScene.pinchSnapRate
+            let a = w * w * (target - state.zoom) - 2 * w * state.zoomSpeed
+            state.zoomSpeed += a * dt
+            state.zoom += state.zoomSpeed * dt
+            // 真正停稳了才轻震，像卡进了档位
+            if abs(target - state.zoom) < 0.004, abs(state.zoomSpeed) < 0.05 {
+                state.zoom = target
+                state.zoomSpeed = 0
+                state.pinchSnapping = false
+                state.onPinchSnap()
+            }
+        } else if let start = state.pullBackStart {
             // 揭晓后没人碰，正在慢慢退回远景（P06）
             state.zoom = CoinScene.pullBackZoom(from: state.pullBackFrom,
                                                 elapsed: now.timeIntervalSince(start))
@@ -657,7 +748,7 @@ struct CoinSceneView: View {
     ///   快退，作者看到的是"直接躺下了"。
     ///   要是这一碰其实是往上划着要抛，镜头照常快退——那是抛掷本来的样子。
     private func checkIdlePullBack(now: Date) {
-        let busy = state.dragging || state.dragUp > 0 || state.spinVelocity != 0
+        let busy = state.dragging || state.dragUp > 0 || state.spinVelocity != 0 || state.pinching
         if busy {
             state.lastActivity = now
             if state.pullBackStart != nil {
@@ -676,7 +767,7 @@ struct CoinSceneView: View {
 
     /// 现在算不算"远景、没人碰"：这时才有游移和呼吸
     private var isIdleFar: Bool {
-        if Self.reduceMotion || state.dragging || state.dragUp > 10 { return false }
+        if Self.reduceMotion || state.dragging || state.dragUp > 10 || state.pinching { return false }
         switch state.phase {
         case .waiting: return true
         case .resting: return state.holdFar
