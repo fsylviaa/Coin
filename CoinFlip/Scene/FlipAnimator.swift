@@ -56,8 +56,8 @@ enum FlipAnimator {
     static func pose(at t: Double, plan: FlipPlan, heightScale: Double,
                      axisYaw: Double = 0) -> Pose {
         let total = Double(plan.halfTurns) * 180
-        let end = wobbleEnd(halfTurns: plan.halfTurns, axisYaw: axisYaw)
-        let side = turnSide(axisYaw: axisYaw)
+        let side = turnSide(axisYaw: axisYaw, personality: plan.personality)
+        let end = wobbleEnd(halfTurns: plan.halfTurns, axisYaw: axisYaw, side: side)
 
         if t >= plan.endTime {
             return Pose(height: 0, degrees: total, tiltDegrees: 0,
@@ -121,7 +121,7 @@ enum FlipAnimator {
     /// 要等镜头抬起来推近，答案才一点点显出来。揭晓的那一口气就在这儿。
     private static func degrees(at t: Double, plan: FlipPlan) -> Double {
         let total = Double(plan.halfTurns) * 180
-        let landing = min(FlipPlanner.landingTilt, total)
+        let landing = min(landingTilt(plan), total)
 
         if t <= plan.landTime {
             let progress = plan.landTime > 0 ? t / plan.landTime : 1
@@ -141,7 +141,7 @@ enum FlipAnimator {
     /// 落地那一刻却已经严丝合缝地对上了。
     static func tilt(at t: Double, plan: FlipPlan) -> Double {
         let total = Double(plan.halfTurns) * 180
-        let landing = min(FlipPlanner.landingTilt, total)
+        let landing = min(landingTilt(plan), total)
 
         if t >= plan.endTime { return 0 }
 
@@ -231,7 +231,7 @@ enum FlipAnimator {
     ///
     /// 它只是让歪斜的方向绕着圈走，不影响朝上的是哪一面。
     private static func wobble(at t: Double, plan: FlipPlan, end: Double, side: Double) -> Double {
-        let start = side * flightPrecessionDegrees
+        let start = side * flightPrecessionDegrees * plan.personality.precessionScale
         guard plan.landTime > 0 else { return 0 }
 
         if t <= plan.landTime {
@@ -268,9 +268,14 @@ enum FlipAnimator {
     ///   （绕斜轴翻 180° = 先转到正轴、翻 180°、再转回来，一来一回朝向差了两倍。）
     ///   打转把这一截补回来，停稳时就严丝合缝。偶数个半圈没有这一截。
     ///   FlipAnimatorTests 里用四元数逐一核对了最后一帧和躺平姿态。
-    static func wobbleEnd(halfTurns: Int, axisYaw: Double) -> Double {
+    static func wobbleEnd(halfTurns: Int, axisYaw: Double, side: Double? = nil) -> Double {
         let correction = halfTurns % 2 == 1 ? -2 * axisYaw : 0
-        return turnSide(axisYaw: axisYaw) * wobbleEndDegrees + correction
+        return (side ?? turnSide(axisYaw: axisYaw)) * wobbleEndDegrees + correction
+    }
+
+    /// 这一次落地时还歪着多少度（P11：在标准值上加这一次的性格）
+    static func landingTilt(_ plan: FlipPlan) -> Double {
+        FlipPlanner.landingTilt + plan.personality.landingTiltOffset
     }
 
     /// 进动、章动、打转往哪边转：+1 或 −1，跟着手指划的方向镜像（P09）。
@@ -278,8 +283,10 @@ enum FlipAnimator {
     /// ★ 左划必须正好是右划照镜子。★ 第一版固定朝一边转：
     ///   往右划时进动把轴往回带、往左划时往外推，作者看着"左划右划飞行姿态不一样"。
     ///   正上方（axisYaw = 0）沿用原来的方向。
-    static func turnSide(axisYaw: Double) -> Double {
-        axisYaw > 0 ? -1 : 1
+    static func turnSide(axisYaw: Double, personality: FlipPersonality = .neutral) -> Double {
+        // 几乎正上方抛：没有左右可言，往哪边转交给这一次的性格（P11）
+        if abs(axisYaw) < 3 { return personality.side }
+        return axisYaw > 0 ? -1 : 1
     }
 
     /// 落地之后到停稳之间走了多少（0 到 1）

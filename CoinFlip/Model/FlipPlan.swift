@@ -44,6 +44,10 @@ struct FlipPlan: Equatable {
     /// 第几秒彻底停稳。到这一刻才解锁上划，允许下一次抛掷。
     let endTime: Double
 
+    /// 这一次的"性格"（P11）：落地斜几度、小跳多高、进动多少……
+    /// 只管怎么演，不碰半圈数，所以不影响结果。
+    var personality: FlipPersonality = .neutral
+
     /// 落地后那一下小跳的高度。方便外部直接引用。
     var bounceHeight: Double { bounces.first?.height ?? 0 }
 
@@ -73,6 +77,7 @@ extension FlipPlan {
                  landTime: landAt,
                  bounces: [],
                  contacts: [Contact(time: landAt, strength: 1)],
-                 endTime: endAt)
+                 endTime: endAt,
+                 personality: personality)
     }
 }

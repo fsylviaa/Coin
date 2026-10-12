@@ -63,7 +63,9 @@ final class CoinController {
                                         distance: distance,
                                         startFace: phase.currentFace,
                                         result: result,
-                                        style: style)
+                                        style: style,
+                                        // 每次抛出那一刻抽一个"性格"（P11），写进时间表，中途不变
+                                        personality: .random())
         phase = .flipping(plan)
         return plan
     }

@@ -132,7 +132,8 @@ enum FlipPlanner {
                          distance: Double,
                          startFace: CoinFace,
                          result: CoinFace,
-                         style: StyleProfile = .silver) -> FlipPlan {
+                         style: StyleProfile = .silver,
+                         personality: FlipPersonality = .neutral) -> FlipPlan {
 
         // 1. 把速度和距离一起换算成 0~1 的"用力程度"
         let force = forceFactor(speed: speed, distance: distance)
@@ -152,7 +153,7 @@ enum FlipPlanner {
 
         // 5. 落地之后：先一下小跳，再是一连串越来越密的边缘磕碰。
         //    真硬币落在硬平面上几乎不弹，声音主要来自躺平前的那阵磕碰。
-        let hopHeight = height * style.bounciness
+        let hopHeight = height * style.bounciness * personality.hopScale
         let hop = FlipPlan.Bounce(height: hopHeight,
                                   duration: flightDuration(height: hopHeight))
         let settle = max(hop.duration * 1.6, minSettleSeconds)
@@ -165,9 +166,10 @@ enum FlipPlanner {
         // 磕碰从小跳落回之后开始，一路密到停稳
         let tapStart = landTime + hop.duration
         let tapSpan = endTime - tapStart
-        for k in 1...rattleTaps {
-            let p = pow(Double(k) / Double(rattleTaps), rattleAccel)
-            let fade = 1 - Double(k - 1) / Double(rattleTaps)
+        let taps = max(personality.rattleTaps, 1)
+        for k in 1...taps {
+            let p = pow(Double(k) / Double(taps), rattleAccel)
+            let fade = 1 - Double(k - 1) / Double(taps)
             // 磕碰一定比前面那下小跳更轻，整串才是一路衰下去的
             contacts.append(.init(time: tapStart + tapSpan * p,
                                   strength: hopStrength * 0.8 * pow(fade, 2.0)))
@@ -180,7 +182,8 @@ enum FlipPlanner {
                         landTime: landTime,
                         bounces: [hop],
                         contacts: contacts,
-                        endTime: endTime)
+                        endTime: endTime,
+                        personality: personality)
     }
 
     // MARK: - 动画结束时朝上的是哪一面（T10）
