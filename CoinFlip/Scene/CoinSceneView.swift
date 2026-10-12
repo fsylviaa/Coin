@@ -955,7 +955,8 @@ struct CoinSceneView: View {
                     degrees: Float(pose.degrees),
                     wobbleDegrees: Float(pose.wobbleDegrees),
                     nutationDegrees: Float(pose.nutationDegrees),
-                    axisYawDegrees: Float(axisYaw)
+                    axisYawDegrees: Float(axisYaw),
+                    selfSpinDegrees: Float(pose.selfSpinDegrees)
                 )
             }
 
@@ -1021,7 +1022,8 @@ struct CoinSceneView: View {
                                degrees: Float,
                                wobbleDegrees: Float,
                                nutationDegrees: Float = 0,
-                               axisYawDegrees: Float = 0) -> simd_quatf {
+                               axisYawDegrees: Float = 0,
+                               selfSpinDegrees: Float = 0) -> simd_quatf {
         // 翻转轴本来是水平朝左右的；章动（P09）让它在飞行中往竖直方向歪一点再正回来，
         // 再整根绕竖直方向转 axisYaw，硬币就朝手指划的方向翻。
         let n = nutationDegrees * .pi / 180
@@ -1029,7 +1031,11 @@ struct CoinSceneView: View {
         let axis = yaw.act(simd_normalize(SIMD3<Float>(cos(n), sin(n), 0)))
         // 先摆成抛之前躺着的样子，再绕这根轴翻 degrees。
         // 轴是正左右方向时，这和原来"绕横轴转 起始角 + degrees"完全一样。
+        // 自转（P10）：先绕币面自己的中心轴转（模型里币面朝 +Z），再摆成躺着的样子。
+        // 绕自己的中心轴转不改变朝上的是哪一面。
+        let selfSpin = simd_quatf(angle: selfSpinDegrees * .pi / 180, axis: [0, 0, 1])
         let resting = simd_quatf(angle: baseAngle(for: startFace) * .pi / 180, axis: [1, 0, 0])
+            * selfSpin
         let tumble = simd_quatf(angle: tumbleSign * degrees * .pi / 180, axis: axis) * resting
         let spin = simd_quatf(angle: wobbleDegrees * .pi / 180, axis: [0, 1, 0])
         return spin * tumble

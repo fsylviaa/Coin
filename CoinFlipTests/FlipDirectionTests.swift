@@ -27,7 +27,8 @@ final class FlipDirectionTests: XCTestCase {
                                             degrees: Float(pose.degrees),
                                             wobbleDegrees: Float(pose.wobbleDegrees),
                                             nutationDegrees: Float(pose.nutationDegrees),
-                                            axisYawDegrees: Float(yaw))
+                                            axisYawDegrees: Float(yaw),
+                                            selfSpinDegrees: Float(pose.selfSpinDegrees))
     }
 
     /// ★ 停稳那一刻，不管往哪边划、翻了几个半圈，姿态都正好等于躺平姿态 ★

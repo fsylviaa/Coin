@@ -354,6 +354,23 @@ final class FlipAnimatorTests: XCTestCase {
         XCTAssertLessThanOrEqual(n(plan.landTime / 2), FlipAnimator.nutationPeakDegrees + 1e-9)
     }
 
+    /// ★ 章动在起飞和落地那一刻不光是 0，还得不在动 ★
+    /// 否则落地那一下就是急刹车——作者看着"最后一圈结束时卡一下"
+    func testNutationIsStillAtBothEnds() {
+        for speed in [400.0, 1500.0, 3000.0] {
+            let plan = makePlan(speed: speed)
+            let h = 1.0 / 600
+            func n(_ t: Double) -> Double {
+                FlipAnimator.pose(at: t, plan: plan, heightScale: scale).nutationDegrees
+            }
+            let atLaunch = (n(h) - n(0)) / h
+            let beforeLanding = (n(plan.landTime) - n(plan.landTime - h)) / h
+            XCTAssertLessThan(abs(atLaunch), 3, "起飞那一刻章动就在猛摆（\(Int(atLaunch))°/s）")
+            XCTAssertLessThan(abs(beforeLanding), 3,
+                              "落地那一刻章动还在摆（\(Int(beforeLanding))°/s），落地会顿一下")
+        }
+    }
+
     /// 打转只绕竖直轴，不会把朝上的那一面转掉
     func testWobbleDoesNotChangeWhichFaceIsUp() {
         let plan = makePlan()

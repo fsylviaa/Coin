@@ -38,6 +38,9 @@ enum FlipAnimator {
         /// 翻转轴此刻往竖直方向歪了多少度（P09，章动）。
         /// 只在飞行中有，起飞和落地那一刻都是 0，所以不影响最后朝上的是哪一面。
         let nutationDegrees: Double
+        /// 硬币绕自己的中心轴（垂直于币面）转了多少度（P10，像飞盘那样）。
+        /// 绕自己的中心轴转不改变朝上的是哪一面；停稳时正好转完整圈，和躺平姿态对得上。
+        let selfSpinDegrees: Double
         /// 这一刻是不是已经彻底停稳了
         let isFinished: Bool
     }
@@ -58,7 +61,8 @@ enum FlipAnimator {
 
         if t >= plan.endTime {
             return Pose(height: 0, degrees: total, tiltDegrees: 0,
-                        wobbleDegrees: end, nutationDegrees: 0, isFinished: true)
+                        wobbleDegrees: end, nutationDegrees: 0,
+                        selfSpinDegrees: side * selfSpinTotalDegrees, isFinished: true)
         }
 
         return Pose(height: height(at: t, plan: plan) * heightScale,
@@ -66,6 +70,7 @@ enum FlipAnimator {
                     tiltDegrees: tilt(at: t, plan: plan),
                     wobbleDegrees: wobble(at: t, plan: plan, end: end, side: side),
                     nutationDegrees: side * nutation(at: t, plan: plan),
+                    selfSpinDegrees: side * selfSpin(at: t, plan: plan),
                     isFinished: false)
     }
 
@@ -181,10 +186,35 @@ enum FlipAnimator {
     /// 起飞、落地两头都是 0，中间最大——歪出去又正回来，结果不受影响。
     static let nutationPeakDegrees: Double = 12
 
-    /// 第 t 秒翻转轴歪了多少度：只在飞行中有，两头为 0
+    /// 第 t 秒翻转轴歪了多少度：只在飞行中有，两头为 0。
+    ///
+    /// ★ 两头不光是 0，还得"不在动"。★ 第一版用 sin，落地那一刻数值是 0、
+    ///   却还在以每秒六十多度往回摆，落地后突然定住——作者看着"最后一圈结束时卡一下"。
+    ///   改成 sin²：起飞时从静止慢慢歪出去，落地前慢慢收回来停稳。
     private static func nutation(at t: Double, plan: FlipPlan) -> Double {
         guard t < plan.landTime, plan.landTime > 0 else { return 0 }
-        return nutationPeakDegrees * sin(.pi * t / plan.landTime)
+        let s = sin(.pi * t / plan.landTime)
+        return nutationPeakDegrees * s * s
+    }
+
+    // MARK: - 自转（P10）
+
+    /// 一次抛掷里，硬币绕自己的中心轴一共转多少度。
+    ///
+    /// ★ 必须是整圈。★ 停稳时画面会摆成干净的躺平姿态（不带自转），
+    ///   不是整圈的话最后一帧图案会原地扭一下——和打转取整圈是同一个道理。
+    static let selfSpinTotalDegrees: Double = 360
+
+    /// 第 t 秒绕自身中心轴转了多少度。
+    ///
+    /// 脱手那一刻手指把转给了它，所以一开始就在转、而且最快，
+    /// 之后一路慢下来，停稳时正好转完、速度为 0。
+    /// 大部分转在空中完成（图案和反光在空中流动），落地后只剩一点余韵，不和打转抢。
+    private static func selfSpin(at t: Double, plan: FlipPlan) -> Double {
+        guard plan.endTime > 0 else { return selfSpinTotalDegrees }
+        let u = min(max(t / plan.endTime, 0), 1)
+        let left = 1 - u
+        return selfSpinTotalDegrees * (1 - left * left * left)
     }
 
     // MARK: - 摇摆打转
