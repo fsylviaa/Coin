@@ -344,11 +344,13 @@ def normal_map(major: Image.Image, fine: Image.Image) -> Image.Image:
 
     这是把贴图从"印花"变成"浮雕"最便宜的一步，不用加一个三角形。
     """
-    major = major.resize((SIZE, SIZE), Image.LANCZOS)
-    fine = fine.resize((SIZE, SIZE), Image.LANCZOS)
-
-    hm = np.array(major.filter(ImageFilter.GaussianBlur(2.2)), dtype=np.float32) / 255
-    hf = np.array(fine.filter(ImageFilter.GaussianBlur(0.9)), dtype=np.float32) / 255
+    # ★ P04：整条链路改成小数运算，最后写图时再加噪点。★
+    #   原来高度图在缩小、模糊时都是 8 位整数（0~255），坡度很缓的地方，
+    #   相邻两点的高度要么一样、要么差 1 级——求出来的坡度就只有几种取值，
+    #   光一扫过，高光一格一格地跳，像地图上的等高线。
+    #   改成小数之后坡度是连续的，写图时再用噪点把最后那次取整打散。
+    hm = _gauss_blur_float(_to_float(major), 2.2)
+    hf = _gauss_blur_float(_to_float(fine), 0.9)
     height = hm + hf * 0.22                     # 细纹只占一点点起伏
 
     gy, gx = np.gradient(height)
@@ -358,9 +360,32 @@ def normal_map(major: Image.Image, fine: Image.Image) -> Image.Image:
     nx, ny, nz = nx / norm, ny / norm, nz / norm
 
     rgb = np.stack([nx, ny, nz], axis=-1) * 0.5 + 0.5
-    img = Image.fromarray((rgb * 255).astype(np.uint8), "RGB").convert("RGBA")
+    # 写进 8 位前掺一点三角分布的噪点（±1 级内），再取整。
+    # 减 0.5 是为了和原来"直接截断"的平均值对齐，整体朝向不偏。
+    rng = np.random.default_rng(20261015)
+    noise = rng.random(rgb.shape) - rng.random(rgb.shape)
+    out = np.clip(np.rint(rgb * 255 - 0.5 + noise), 0, 255).astype(np.uint8)
+    img = Image.fromarray(out, "RGB").convert("RGBA")
     img.putalpha(circular_alpha())
     return img
+
+
+def _to_float(layer: Image.Image) -> np.ndarray:
+    """8 位的图层 → 缩到成品尺寸的小数高度（0~1），缩小时不再取整。"""
+    f = Image.fromarray(np.array(layer, dtype=np.float32) / 255, "F")
+    return np.array(f.resize((SIZE, SIZE), Image.LANCZOS), dtype=np.float32)
+
+
+def _gauss_blur_float(a: np.ndarray, sigma: float) -> np.ndarray:
+    """小数图的高斯模糊（频域做，边缘镜像延拓，不会从对边串过来）。"""
+    pad = int(sigma * 4) + 2
+    p = np.pad(a, pad, mode="reflect")
+    h, w = p.shape
+    fy = np.fft.fftfreq(h)[:, None]
+    fx = np.fft.fftfreq(w)[None, :]
+    g = np.exp(-2 * (np.pi * sigma) ** 2 * (fx ** 2 + fy ** 2))
+    out = np.real(np.fft.ifft2(np.fft.fft2(p) * g))
+    return out[pad:-pad, pad:-pad].astype(np.float32)
 
 
 def base_silver() -> np.ndarray:
