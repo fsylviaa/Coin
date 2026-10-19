@@ -46,6 +46,22 @@ enum CoinScene {
     /// 拉回用多久。快，不耽误下一次抛掷
     static let zoomOutSeconds: Double = 0.22
 
+    /// ★ 特写时不响应歪手机、晃手机（作者要求）。★
+    /// 镜头离得近，硬币一滑、一歪就出框。镜头推近超过这么多（0 远景 ~ 1 特写）就关掉；
+    /// 关掉时硬币停在原地、缓缓回正。
+    static let shakeMaxZoom: Double = 0.2
+
+    static func shakeAllowed(zoom: Double) -> Bool { zoom <= shakeMaxZoom }
+
+    /// 水平仪跟上手机姿态要多久（秒）。很短——要跟手，但滤掉感应器的抖动
+    static let levelFollowSeconds: Double = 0.08
+
+    /// 镜头中心跟上硬币要多久（秒）。慢一点，像摄影师在跟，不像钉死在硬币上
+    static let cameraFollowSeconds: Double = 0.35
+
+    /// 摇偏的硬币起飞后，多久收回中间（P13）
+    static let shakeLaunchReturnSeconds: Double = 0.3
+
     /// 揭晓之后多久没人碰，镜头自己退回远景（P06）
     static let idlePullBackAfter: Double = 10
     /// 自己退回远景用多久。和抛掷时那种 0.22 秒的快退不同，这是没人看的时候
@@ -304,6 +320,20 @@ final class CoinSceneState {
     var pinchChoseNear = false
     var onPinchSnap: () -> Void = {}
 
+    // ── 摇手机（P12、P13）──
+    /// 硬币底下那缕薄雾（承托光）。P12：它要跟着硬币左右走
+    var ground: Entity?
+    var shake = ShakeModel()
+    let sensor = ShakeSensor()
+    /// 起飞那一刻硬币被摇偏了多少。飞行开头这一截慢慢收回中间，不能瞬移
+    var launchShake = SIMD2<Float>(0, 0)
+    /// 镜头中心跟着硬币挪了多少（地面上的 x、z）
+    var cameraShift = SIMD2<Float>(0, 0)
+    var onShakeTap: () -> Void = {}
+    var onWallKnock: (Float) -> Void = { _ in }
+    /// 水平仪：硬币此刻为了"在人眼里保持水平"歪了多少（场景里的 轴 × 角度，弧度）
+    var levelTilt = SIMD3<Float>(0, 0, 0)
+
     // ── 翻转方向（P09）──
     /// 这一次往哪个方向翻。★ 必须经过这个盒子 ★——每帧回调是搭场景时挂上的，
     /// 直接读视图上的 flipDirection 永远是当时的 0（第一版就栽在这里，作者看着"没有任何变化"）
@@ -347,6 +377,11 @@ struct CoinSceneView: View {
     /// 这一次往哪个方向翻（度，0 是正上方，往右为正）。跟着手指上划的方向（P09）
     var flipDirection: Double = 0
 
+    /// 上下摇时硬币颠一下落回玻璃的那一下："嗒"一声加轻震（P13）
+    var onShakeTap: () -> Void = {}
+    /// 左右甩时硬币撞到边：声音加震动，轻重随撞击（P13）
+    var onWallKnock: (Float) -> Void = { _ in }
+
     /// 屏幕上往右偏 ψ 度 → 翻转轴绕竖直方向转多少度。
     ///
     /// 镜头从 +z 方向、离地 28° 斜着看过去：屏幕右边是 +x，屏幕上方是地面的 −z，
@@ -381,7 +416,10 @@ struct CoinSceneView: View {
             // P02 曾把原来那圈白色光晕删掉，结果影子跟着看不见了——
             // 影子只能把亮的东西压暗，底下全是暗的星空就没东西可压，硬币也像飘着。
             // 现在加回来的是一小片冷蓝银色的暗光，和银河一个色调（见 make_assets.py）。
-            content.add(GroundShadow.makeGround())
+            let ground = GroundShadow.makeGround()
+            content.add(ground)
+            state.ground = ground
+            state.sensor.start()
 
             let shadow = GroundShadow.makeShadow()
             content.add(shadow)
@@ -414,6 +452,9 @@ struct CoinSceneView: View {
                 // 刚从抛掷切回等待，呼吸要从头开始，不然会突然跳一下
                 if case .waiting = phase { state.idleSince = Date() }
                 if case .flipping = phase {
+                    // 摇偏了的硬币起飞：记下偏移，飞行开头慢慢收回中间（P13）
+                    state.launchShake = state.shake.offset
+                    state.shake.reset()
                     // 抛过一次之后，揭晓时就推成特写了（冷启动那段远景到此为止）
                     state.holdFar = false
                     // 脱手这一刻硬币已经被手指提到一定高度，
@@ -456,6 +497,8 @@ struct CoinSceneView: View {
             // 双指缩放（P07）：开始时记下镜头位置，松开时决定吸到远景还是特写
             state.onPinchSnap = onPinchSnap
             state.flipDirection = flipDirection
+            state.onShakeTap = onShakeTap
+            state.onWallKnock = onWallKnock
             if let scale = pinchScale {
                 if !state.pinching {
                     state.pinching = true
@@ -495,6 +538,7 @@ struct CoinSceneView: View {
 
         updateLift(dt: dt, now: now)
         updateSpin(dt: dt, now: now)
+        updateShake(dt: dt)
         updateCamera(dt: dt, now: now)
         updateCoin(now: now)
         updateShadow()
@@ -539,6 +583,10 @@ struct CoinSceneView: View {
     /// 既保留了承托感，也不会有随高度收放的动态。
     private func updateShadow() {
         guard let shadow = state.shadow, let coin = state.coin else { return }
+
+        // P12：承托光（那缕薄雾）跟着硬币左右走。硬币被摇开时，它是"硬币底下的光"，
+        // 不跟着走就会和硬币脱节。阴影本来就跟着 coin.position 走（见 GroundShadow.update）
+        state.ground?.position = [coin.position.x, GroundShadow.groundY, coin.position.z]
 
         // 用最低点而不是圆心：歪着的硬币圆心被顶得很高，
         // 但它还贴在地上，阴影这时候不该散开
@@ -771,7 +819,13 @@ struct CoinSceneView: View {
 
         let er = elevation * .pi / 180
         let yr = yaw * .pi / 180
-        let lookAt = SIMD3<Float>(0, lookUp, 0)
+        // 硬币被歪手机滑开了：镜头的中心缓缓跟过去（P13），特写时也不出画
+        if let coin = state.coin {
+            let target = SIMD2<Float>(coin.position.x, coin.position.z)
+            let k = Float(1 - exp(-dt / CoinScene.cameraFollowSeconds))
+            state.cameraShift += (target - state.cameraShift) * k
+        }
+        let lookAt = SIMD3<Float>(state.cameraShift.x, lookUp, state.cameraShift.y)
         let position = lookAt + distance * SIMD3<Float>(
             sin(yr) * cos(er),
             sin(er),
@@ -808,6 +862,43 @@ struct CoinSceneView: View {
             state.pullBackStart = now
             state.pullBackFrom = state.zoom
         }
+    }
+
+    /// 歪手机、晃手机（P13）：每帧问一次感应器，按重力推一下硬币。
+    ///
+    /// 只在硬币静止、没人碰的时候接受；其余时候原地不动。
+    /// 硬币滑开后镜头会跟过去（见 updateCamera），所以特写时也不会出画。
+    private func updateShake(dt: Double) {
+        let reading = state.sensor.read(dt: dt)
+        var enabled = !Self.reduceMotion && !state.dragging && state.dragUp == 0
+            && !state.pinching && state.lift < 0.001
+            && CoinScene.shakeAllowed(zoom: state.zoom)
+        if case .flipping = state.phase { enabled = false }
+        state.shake.step(dt: Float(dt), tilt: reading.tilt, jerk: reading.jerk, enabled: enabled)
+
+        // 水平仪（作者要的"硬币始终保持真实的平"）：手机歪多少，硬币在屏幕里反着歪多少。
+        // 算出来的转法在手机坐标里；手机的右、上、朝向用户，正好就是镜头自己的 x、y、z，
+        // 所以用镜头的朝向把它换到场景里。不允许动的时候缓缓回正
+        var target = SIMD3<Float>(0, 0, 0)
+        if enabled, let camera = state.camera {
+            // ★ 只认左右歪（作者要求）★：前后的变化不算，只把左右那一份换进"现在姿态"
+            let b = reading.baselineDown, g = reading.currentDown
+            let rollOnly = SIMD3<Float>(g.x, b.y, b.z)
+            let level = ShakeModel.levelRotation(baselineDown: b, currentDown: rollOnly)
+            target = camera.orientation.act(level.axis) * level.angle
+        }
+        let k = Float(1 - exp(-dt / CoinScene.levelFollowSeconds))
+        state.levelTilt += (target - state.levelTilt) * k
+        // 撞到边：有声音、有震动，撞得越重越明显
+        if state.shake.hitWall { state.onWallKnock(state.shake.wallImpact) }
+        // 上下摇颠起来又落回玻璃：一声轻"嗒"加轻震
+        if state.shake.hopLanded { state.onShakeTap() }
+    }
+
+    /// 两头都软的 0→1 曲线
+    static func smooth(_ x: Double) -> Double {
+        let p = min(max(x, 0), 1)
+        return p * p * (3 - 2 * p)
     }
 
     /// 现在算不算"远景、没人碰"：这时才有游移和呼吸
@@ -935,7 +1026,10 @@ struct CoinSceneView: View {
             // 真实的倾角要从累计翻转角折算——pose.tiltDegrees 是摇停用的，
             // 飞行中几乎是 0，拿它算阴影会让翻滚时的影子一直是满的
             state.coinTilt = Self.tiltFromFlat(degrees: pose.degrees)
-            coin.position = [0, contact + Self.pivotLift(tiltDegrees: pose.tiltDegrees), 0]
+            // 起飞时被摇偏的那一截，在飞行开头 0.3 秒里平滑收回中间（P13）
+            let back = Float(Self.smooth(min(t / CoinScene.shakeLaunchReturnSeconds, 1)))
+            let drift = state.launchShake * (1 - back)
+            coin.position = [drift.x, contact + Self.pivotLift(tiltDegrees: pose.tiltDegrees), drift.y]
 
             if pose.isFinished {
                 // 停稳时摆成干净的躺平姿态，不留累加的零头。
@@ -973,8 +1067,13 @@ struct CoinSceneView: View {
     /// 提起的同时让它歪一点，像被从桌面上掀起一角——
     /// 纯粹平移上升看着像"浮空"，加一点倾斜才有被捏住的实感。
     private func applyLift(to coin: Entity, face: CoinFace) {
-        coin.position = [0, state.lift, 0]
-        state.contactHeight = state.lift
+        // 摇手机（P13）：贴地滑开 + 离地一点点的小颠
+        // 水平仪让硬币歪着时，一边贴着玻璃、另一边抬起，圆心要跟着抬高，不能沉进地面
+        let levelAngle = simd_length(state.levelTilt)
+        let levelLift = Self.pivotLift(tiltDegrees: Double(levelAngle * 180 / .pi))
+        let o = state.shake.offset
+        coin.position = [o.x, state.lift + state.shake.hop + levelLift, o.y]
+        state.contactHeight = state.lift + state.shake.hop
 
         let ratio = CoinScene.maxDragLift > 0 ? state.lift / CoinScene.maxDragLift : 0
         let tilt = CoinScene.dragTilt * ratio * .pi / 180
@@ -991,9 +1090,18 @@ struct CoinSceneView: View {
             translation: CGSize(width: state.dragSide, height: -state.dragUp))
         let axisYaw = Float(Self.axisYaw(forFlipDirection: direction)) * .pi / 180
         let axis = simd_quatf(angle: axisYaw, axis: [0, 1, 0]).act([1, 0, 0])
-        coin.transform.rotation = yaw
+        // 摇手机时的小晃（P13）：几度以内，远不到翻面
+        let w = state.shake.wobbleAxis
+        let wobble = simd_quatf(angle: state.shake.wobble * .pi / 180,
+                                axis: simd_normalize(SIMD3<Float>(w.x, 0, w.y)))
+        let level = levelAngle > 1e-5
+            ? simd_quatf(angle: levelAngle, axis: state.levelTilt / levelAngle)
+            : simd_quatf(angle: 0, axis: [0, 1, 0])
+        coin.transform.rotation = level * wobble * yaw
             * simd_quatf(angle: Self.tumbleSign * tilt, axis: axis)
             * Self.restingRotation(for: face)
+        // 阴影按歪得更厉害的那个减淡（侧着的硬币挡光少）
+        state.coinTilt = max(state.coinTilt, levelAngle * 180 / .pi)
     }
 
     // MARK: - 姿态

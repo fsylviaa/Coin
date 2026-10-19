@@ -79,7 +79,9 @@ struct RootView: View {
                 pinchScale: pinchScale,
                 // 双指松开、镜头吸到远景或特写那一下，轻轻"嗒"一声，和横拨同一种手感
                 onPinchSnap: { feedback.spinTick() },
-                flipDirection: flipDirection
+                flipDirection: flipDirection,
+                onShakeTap: { feedback.shakeTap() },
+                onWallKnock: { feedback.wallKnock(impact: $0) }
             )
 
             // 透明手势板，盖在 3D 画面之上

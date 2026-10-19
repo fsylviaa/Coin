@@ -147,6 +147,19 @@ final class FeedbackPlayer {
         }
     }
 
+    /// 上下摇时硬币颠一下落回玻璃：很轻的一声"嗒"加一下轻震（P13 方案 B）
+    func shakeTap() {
+        playSound(volume: 0.22)
+        haptics.simpleTap(strength: 0.3)
+    }
+
+    /// 左右甩时硬币撞到边：撞得越重越响、震得越明显（impact 0~1）
+    func wallKnock(impact: Float) {
+        let s = Double(min(max(impact, 0), 1))
+        playSound(volume: Float(0.12 + 0.4 * s))
+        haptics.simpleTap(strength: 0.25 + 0.5 * s)
+    }
+
     private func playSound(volume: Float) {
         guard !landPlayers.isEmpty else { return }
         let players = landPlayers
