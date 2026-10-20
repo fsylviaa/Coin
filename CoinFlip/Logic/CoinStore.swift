@@ -1,7 +1,8 @@
 // 本机存储：记住最后一次抛出的结果。对应任务 T11。
 //
-// 整个 App 只往手机里存这一个值，不存历史、不统计次数、不上传任何数据。
-// 用的是系统自带的 UserDefaults，相当于一个小抽屉。
+// 手机里存三样东西：最后一次结果、引导看过没有、抛硬币的记录（FlipStats）。
+// 记录是 2026-10-19 加的（原需求不统计次数，作者改了，见任务清单"需求变更记录"）。
+// 都不上传任何数据。用的是系统自带的 UserDefaults，相当于一个小抽屉。
 // 删掉 App，这条记录也跟着没了。
 //
 // ⚠️ 结果必须在"决定的那一刻"就存，不能等落地后再存（技术文档第 7 号坑）。
@@ -17,6 +18,9 @@ struct CoinStore {
 
     /// 首次上划引导看过了没有
     private static let hintKey = "hasSeenSwipeHint"
+
+    /// 抛硬币的记录。改了键名，老用户的记录就读不到了，所以不要改。
+    private static let statsKey = "flipStats"
 
     private let defaults: UserDefaults
 
@@ -52,9 +56,24 @@ struct CoinStore {
         defaults.set(true, forKey: Self.hintKey)
     }
 
-    /// 清空记录，回到"从没抛过"的状态。目前只在测试里用。
+    /// 存记录。
+    func saveStats(_ stats: FlipStats) {
+        guard let data = try? JSONEncoder().encode(stats) else { return }
+        defaults.set(data, forKey: Self.statsKey)
+    }
+
+    /// 读记录。从没存过、或者存的东西坏了，就当一次都没抛过。
+    func loadStats() -> FlipStats {
+        guard let data = defaults.data(forKey: Self.statsKey),
+              let stats = try? JSONDecoder().decode(FlipStats.self, from: data)
+        else { return FlipStats() }
+        return stats
+    }
+
+    /// 清空一切，回到"从没抛过"的状态。目前只在测试里用。
     func clear() {
         defaults.removeObject(forKey: Self.key)
         defaults.removeObject(forKey: Self.hintKey)
+        defaults.removeObject(forKey: Self.statsKey)
     }
 }

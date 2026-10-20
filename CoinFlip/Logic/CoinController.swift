@@ -17,12 +17,23 @@ final class CoinController {
     /// 要不要放首次上划引导。只有装上之后从没抛过的那一次是 true。
     private(set) var showsHint = false
 
+    /// 抛硬币的记录（卡片上显示的那些数）。硬币落定时才加一次。
+    private(set) var stats = FlipStats()
+
+    /// 这一次落定正好是第 100 / 500 / 1000 次时，存着这个数；下一次上划就清掉。
+    /// 底部那行字靠它多显示一句"No. 100"。
+    private(set) var milestone: Int?
+
     private let store: CoinStore
     private let style: StyleProfile
+    /// 现在几点。平时就是真实时间；测试里换成固定时间，好测"今天"。
+    private let now: () -> Date
 
-    init(store: CoinStore = CoinStore(), style: StyleProfile = .silver) {
+    init(store: CoinStore = CoinStore(), style: StyleProfile = .silver,
+         now: @escaping () -> Date = Date.init) {
         self.store = store
         self.style = style
+        self.now = now
     }
 
     /// App 启动时调用一次。
@@ -33,6 +44,7 @@ final class CoinController {
         } else {
             phase = .waiting
         }
+        stats = store.loadStats()
         showsHint = !store.hasSeenHint
     }
 
@@ -55,6 +67,7 @@ final class CoinController {
         guard phase.acceptsFlip else { return nil }   // 抛掷中，直接忽略，不排队也不叠加
 
         hintFinished()                                // 会抛了，引导就不用再放了
+        milestone = nil                               // 上一次的"No. 100"到此为止
 
         let result = FlipPlanner.decideResult()
         store.save(result)                            // 立刻存档，先于动画
@@ -73,7 +86,7 @@ final class CoinController {
     /// 动画正常演完（到达时间表的 endTime）时调用。
     func finishFlip() {
         guard case .flipping(let plan) = phase else { return }
-        phase = .resting(plan.result)
+        settle(plan)
     }
 
     /// 抛掷中被打断：切后台、来电等。
@@ -82,6 +95,25 @@ final class CoinController {
     /// 结果在 requestFlip 时就存过了，这里不需要再存。
     func interrupt() {
         guard case .flipping(let plan) = phase else { return }
+        settle(plan)
+    }
+
+    /// 硬币落定：摆成结果，并记一次。
+    ///
+    /// 记录放在落定这一刻（而不是上划那一刻），这样硬币还在空中时打开卡片，
+    /// 卡片上的数字不会提前"剧透"这一次的结果。
+    /// 代价：硬币飞到一半 App 被系统杀掉，这一次不进记录（结果本身照样存着）。
+    private func settle(_ plan: FlipPlan) {
         phase = .resting(plan.result)
+        stats.record(plan.result, halfTurns: plan.halfTurns, at: now())
+        store.saveStats(stats)
+        milestone = stats.isMilestone ? stats.total : nil
+    }
+
+    /// 卡片上点"清零"并确认后调用。只清记录，不动"最后一次结果"。
+    func resetStats() {
+        stats = FlipStats()
+        store.saveStats(stats)
+        milestone = nil
     }
 }

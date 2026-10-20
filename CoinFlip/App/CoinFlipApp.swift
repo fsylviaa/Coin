@@ -62,6 +62,9 @@ struct RootView: View {
     /// 声音与震动
     @State private var feedback = FeedbackPlayer()
 
+    /// 记录卡片开着没有
+    @State private var showsRecord = false
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -168,9 +171,45 @@ struct RootView: View {
 
             VStack {
                 Spacer()
-                StatusLine(phase: controller.phase, speed: lastSpeed)
+                StatusLine(phase: controller.phase, speed: lastSpeed,
+                           milestone: controller.milestone)
             }
             .allowsHitTesting(false)        // 这行字不抢手势
+
+            // ── 记录卡片：盖一层暗幕，点暗幕任意处关掉 ──
+            // 暗幕同时挡住手势板，卡片开着时不会误抛
+            if showsRecord {
+                Color.black.opacity(0.5)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { setRecord(false) }
+                    .transition(.opacity)
+                    .accessibilityLabel("关闭记录")
+                    .accessibilityAddTraits(.isButton)
+
+                RecordCard(stats: controller.stats, now: Date(),
+                           onReset: { controller.resetStats() })
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+            }
+
+            // ── 右上角的记录图标 ──
+            // 外面那层 VStack / HStack 的空白处不接触摸，手势照样落到手势板上
+            VStack {
+                HStack {
+                    Spacer()
+                    Button { setRecord(!showsRecord) } label: {
+                        RecordIcon()
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(RecordIconButtonStyle())
+                    .accessibilityLabel("记录")
+                }
+                Spacer()
+            }
+            .padding(.top, 2)
+            .padding(.trailing, 4)
         }
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
@@ -180,6 +219,14 @@ struct RootView: View {
 }
 
 extension RootView {
+
+    /// 打开 / 关上记录卡片。减少动态效果模式下只淡入淡出，不缩放。
+    private func setRecord(_ show: Bool) {
+        withAnimation(CoinSceneView.reduceMotion ? .linear(duration: 0.2)
+                                                 : .easeOut(duration: 0.25)) {
+            showsRecord = show
+        }
+    }
 
     /// 减少动态效果模式下的揭晓：画面暗下去，再亮起来。
     ///
@@ -239,6 +286,8 @@ private struct StatusLine: View {
 
     let phase: CoinPhase
     let speed: Double
+    /// 刚好第 100 / 500 / 1000 次落定时有值，多显示一句 "No. 100"；下一次上划就收起
+    var milestone: Int? = nil
 
     var body: some View {
         Text(text)
@@ -258,7 +307,13 @@ private struct StatusLine: View {
         // 开发版多挂一个上划速度，调手感时要看。正式版没有。
         if case .flipping = phase { return "Coin: \(word) · \(Int(speed))" }
         #endif
-        return "Coin: \(word)"
+        return "Coin: \(word)" + milestoneSuffix
+    }
+
+    /// 里程碑那一句。只在落定后显示，抛起来就没了。
+    private var milestoneSuffix: String {
+        guard case .resting = phase, let n = milestone else { return "" }
+        return " · No. \(n)"
     }
 
     private var word: String {
@@ -274,7 +329,10 @@ private struct StatusLine: View {
         switch phase {
         case .waiting:              return "硬币静止，上划抛出"
         case .flipping:             return "抛掷中"
-        case .resting(let face):    return face == .sun ? "结果：日面" : "结果：月面"
+        case .resting(let face):
+            let base = face == .sun ? "结果：日面" : "结果：月面"
+            if let n = milestone { return base + "，这是第 \(n) 次" }
+            return base
         }
     }
 }
