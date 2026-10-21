@@ -10,6 +10,7 @@
 以后要换素材时，直接替换这三个文件即可，文件名不要改。
 
 重新生成：python3 scripts/make_assets.py
+只重做音效：python3 scripts/make_assets.py --sounds
 
 ── 版面结构（从外到内）──
     凸起外缘 → 珠圈 → 拉丁文环 → 珠圈 → 同心细纹底 → 中央图案
@@ -17,6 +18,7 @@
 
 import math
 import struct
+import sys
 import wave
 from pathlib import Path
 
@@ -966,92 +968,130 @@ def make_icon():
 
 # ─────────────────────────── 音效 ───────────────────────────
 
-def metal_ring(partials, dur, fast, slow, slow_share, noise=0.0, grain=0.0, seed=11):
+def _sosfilt(sos, x):
+    """二阶滤波器串起来过一遍（等同 scipy.signal.sosfilt，免得要装 scipy）。"""
+    y = np.asarray(x, dtype=float)
+    for b0, b1, b2, _a0, a1, a2 in sos:
+        out = np.empty_like(y)
+        z1 = z2 = 0.0
+        for i, v in enumerate(y):
+            o = b0 * v + z1
+            z1 = b1 * v - a1 * o + z2
+            z2 = b2 * v - a2 * o
+            out[i] = o
+        y = out
+    return y
+
+
+# 滤波器系数：scipy.signal.butter(2, …, fs=44100, output="sos") 算好抄过来的
+_LP_2500 = [[0.02517611455440142, 0.05035222910880284, 0.02517611455440142,
+             1.0, -1.5036953412992213, 0.6043997995168271]]
+_LP_8000 = [[0.17724502554144148, 0.35449005108288295, 0.17724502554144148,
+             1.0, -0.508717528105478, 0.2176976302712438]]
+_LP_9000 = [[0.21320719693771073, 0.42641439387542146, 0.21320719693771073,
+             1.0, -0.3391511849431443, 0.1919799726939872]]
+_BP_2500_5000 = [[0.025176114554401427, 0.050352229108802854, 0.025176114554401427,
+                  1.0, -1.377383760888315, 0.7334709255823437],
+                 [1.0, -2.0, 1.0, 1.0, -1.6864739025311835, 0.824026936087426]]
+
+
+def metal_ring(partials, dur, click=0.0, seed=1, tail_fade=0.03):
     """
-    合成一声金属的响。
+    合成一声金属的响。2026-10 重做（用户反映原来的声音尖锐刺耳）。
 
-    关键在两点，都是从真实录音里量出来的：
+    原来那版刺耳，量出来是三个原因，这一版都避开了：
 
-    ① 几乎全是高频。参考音里 88% 的能量在 4kHz 以上。
-       低频一多就"实"，听起来像敲木头或塑料，不像硬币。
+    ① 能量全挤在 5kHz 以上，一点"身体"都没有，像一根细针。
+       → 主音降到 3.2kHz 上下，9kHz 以上全砍掉。
 
-    ② 两段式衰减。先很快掉一半（38 毫秒），然后拖着一条长长的余韵
-       （300 毫秒才衰到十分之一）。只有快衰减就干巴巴，只有慢衰减就发闷。
+    ② 成簇的分音靠得太近（5310/5410 差 100Hz），互相打架，每秒抖一百下，
+       耳朵听着就是"毛"、"刺"。
+       → 成对的分音只差 6Hz，抖得很慢，听着是"嗡——"的颤，不扎耳朵。
 
-    另外频率是成簇的（比如 5310/5410/5510 挤在一起），
-    它们互相干涉会产生细微的颤动，这就是金属特有的那种"嗡"的质感。
+    ③ 所有分音一起衰减，尖的高音拖得和主音一样长。
+       → 每个分音各自衰减，越高的死得越快（真金属就是这样）。
+
+    partials：(频率, 响度, 衰减速度)。衰减速度越大，这个音消失得越快。
     """
     rate = 44_100
-    t = np.linspace(0, dur, int(rate * dur), endpoint=False)
-    env = (1 - slow_share) * np.exp(-fast * t) + slow_share * np.exp(-slow * t)
-
-    w = np.zeros_like(t)
-    for freq, amp in partials:
-        # 每个分音的余韵长短略有不同，听起来才不呆板
-        jitter = 1 + 0.25 * ((freq % 7) / 7 - 0.5)
-        w += amp * np.sin(2 * np.pi * freq * t) * env ** jitter
-
+    t = np.arange(int(rate * dur)) / rate
     rng = np.random.default_rng(seed)
+    w = np.zeros_like(t)
+    for freq, amp, decay in partials:
+        phase = rng.uniform(0, 2 * np.pi)
+        w += amp * np.sin(2 * np.pi * freq * t + phase) * np.exp(-decay * t)
 
-    # 撞击瞬间那一下极短的噪声，给声音一个"尖"的起头
-    if noise > 0:
-        w += rng.normal(0, 1, t.shape) * np.exp(-1500 * t) * noise
+    # 指尖弹开的那一下：磨圆了的轻响（只用在抛起上）
+    if click > 0:
+        n = _sosfilt(_LP_2500, rng.normal(0, 1, t.shape)) * np.exp(-400 * t)
+        w += click * n / (np.abs(n).max() + 1e-9)
 
-    # 颗粒感：跟着余韵一起慢慢消失的高频沙沙声。
-    # 真金属的响声不是纯净的正弦，表面的不规则会带出这层细碎的毛刺，
-    # 少了它就显得太"电子"。先做个简单的高通，把低频隆隆去掉。
-    if grain > 0:
-        nz = rng.normal(0, 1, t.shape)
-        nz = np.diff(nz, prepend=nz[0])
-        w += nz * env * grain
-
-    w *= np.clip(t / 0.0008, 0, 1)            # 开头淡入，避免爆音
-    w *= np.clip((dur - t) / 0.02, 0, 1)      # 结尾淡出，避免断得生硬
+    w *= np.clip(t / 0.0015, 0, 1)            # 开头淡入，避免爆音
+    w *= np.clip((dur - t) / tail_fade, 0, 1)  # 结尾淡出，避免断得生硬
     return w / np.max(np.abs(w))
 
 
+def contact_tick(w, amount, seed=9):
+    """
+    落地那一瞬间清脆的"叮"：很短的一下，只留 2.5k~5k 这一段，所以脆而不沙。
+    ★ 别换成低沉的"笃"，也别把它磨圆 —— 作者试听过，那样太钝，不像硬币。
+    """
+    t = np.arange(len(w)) / 44_100
+    n = _sosfilt(_BP_2500_5000, np.random.default_rng(seed).normal(0, 1, t.shape))
+    n *= np.exp(-1100 * t)
+    return w + amount * n / np.abs(n).max()
+
+
 def write_wav(name, w, gain=0.85):
-    pcm = (w * gain * 32767).astype(np.int16)
+    pcm = np.clip(w * gain, -1, 1)
+    pcm = (pcm * 32767).astype(np.int16)
     path = OUT / f"{name}.wav"
     with wave.open(str(path), "wb") as f:
         f.setnchannels(1)
         f.setsampwidth(2)
         f.setframerate(44_100)
-        f.writeframes(b"".join(struct.pack("<h", s) for s in pcm))
+        f.writeframes(pcm.tobytes())
     print(f"  {path.name}  {len(w) / 44_100:.2f} 秒  {path.stat().st_size // 1024} KB")
 
 
 def make_sounds():
-    # 抛起：手指弹开硬币的那一声。
-    # 要亮、要长——硬币升到最高点时它还在响，这是"仪式"的起手式。
+    """
+    作者 2026-10-21 试听选定的是「A 抛起 + L3 叮当落地」。
+
+    音量：比原来那版轻约 3 分贝（按人耳听感算），gain 就是这么来的。
+    后面的"嗒嗒嗒"磕碰、摇手机颠一下、甩到边，都用落地音调轻了放，
+    所以改落地音就是一起改了它们。
+    """
+    # 抛起：指尖弹开硬币的"叮"，余韵 1 秒多，硬币升到高处还在响
     toss = metal_ring(
         partials=[
-            (5_246, 1.00), (5_340, 0.88), (5_443, 0.76), (5_556, 0.68),
-            (5_693, 0.56), (6_880, 0.52), (7_640, 0.40), (9_320, 0.40),
-            (11_400, 0.28), (13_700, 0.20), (16_200, 0.12),
-            (4_750, 0.34),
-            (2_180, 0.05),                              # 中频只留一丝，多了就闷
+            (3_180, 1.00, 3.2), (3_186, 0.75, 3.6),   # 主音：一对只差 6Hz，慢慢地颤
+            (4_410, 0.45, 6), (5_830, 0.22, 11), (7_350, 0.08, 20),
+            (1_590, 0.18, 4.5),                       # 低一个八度的一点身体
         ],
-        dur=1.7, fast=22, slow=2.3, slow_share=0.46, noise=0.06, grain=0.17,
+        dur=1.2, click=0.10, seed=1,
     )
-    write_wav("toss_silver", toss, gain=0.60)
+    toss = _sosfilt(_LP_8000, toss)
+    write_wav("toss_silver", toss / np.max(np.abs(toss)), gain=0.15970)
 
-    # 落地：比抛起短，但也要带得住余韵，不能是"啪"的一下死响
+    # 落地：起头一下清脆的"叮"，然后硬币在桌上"叮——"地响一会儿
     land = metal_ring(
         partials=[
-            (5_310, 0.92), (5_410, 1.00), (5_510, 0.82), (5_600, 0.70),
-            (6_290, 0.76), (6_380, 0.64), (6_900, 0.58),
-            (9_350, 0.46), (11_840, 0.34), (11_940, 0.28),
-            (13_900, 0.22), (16_500, 0.13),
-            (190, 0.05),                                  # 平面的一点回应，很轻
+            (3_260, 1.00, 3.6), (3_266, 0.70, 4.0),
+            (4_510, 0.50, 6.5), (5_950, 0.30, 11), (7_420, 0.12, 20),
         ],
-        dur=0.95, fast=36, slow=5.0, slow_share=0.30, noise=0.11, grain=0.21, seed=5,
+        dur=0.95, seed=5,
     )
-    write_wav("land_silver", land, gain=0.88)
+    land = _sosfilt(_LP_9000, contact_tick(land, 0.5))
+    write_wav("land_silver", land / np.max(np.abs(land)), gain=0.22462)
 
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
+    if "--sounds" in sys.argv:          # 只重做两个音效，贴图一概不动
+        print("生成音效：")
+        make_sounds()
+        raise SystemExit
     print("生成贴图：")
     for name, text, motif in [("sun_silver", SUN_TEXT, sun_motif),
                               ("moon_silver", MOON_TEXT, moon_motif)]:
