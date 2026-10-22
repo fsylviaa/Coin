@@ -295,4 +295,15 @@ enum FlipAnimator {
         guard settle > 0 else { return 1 }
         return min(max((t - plan.landTime) / settle, 0), 1)
     }
+
+    // MARK: - 计数（2026-10）
+
+    /// 屏幕上的计数此刻该显示几个半圈。
+    ///
+    /// 跟着实际翻过的角度，每过半圈加一；但**落地之前最多到倒数第二个数**，
+    /// 落地那一刻才给出总数——不会比硬币先把结果露出来。
+    static func shownHalfTurns(at t: Double, plan: FlipPlan, degrees: Double) -> Int {
+        if t >= plan.landTime { return plan.halfTurns }
+        return min(max(Int(degrees / 180), 0), max(plan.halfTurns - 1, 0))
+    }
 }

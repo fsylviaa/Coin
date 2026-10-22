@@ -59,6 +59,18 @@ struct RootView: View {
     /// 这一次往哪个方向翻（度，0 是正上方，往右为正）。跟着手指上划的方向（P09）
     @State private var flipDirection: Double = 0
 
+    // ── 这一抛转了几圈（2026-10）──
+    /// 屏幕上的计数现在显示几个半圈；nil 表示不显示
+    @State private var counterHalfTurns: Int?
+    /// 这一次的总半圈数（落地时用来补齐，减少动态效果模式下也靠它）
+    @State private var counterFinal = 0
+    /// 抛之前的纪录（"转得最多的一抛"）。0 表示还没有纪录，这一抛不算破纪录
+    @State private var recordToBeat = 0
+    @State private var counterIsRecord = false
+    @State private var counterRecordLanded = false
+    /// 每一抛一个编号。淡出是延时做的，编号对不上说明已经开始了下一抛，就别去淡它
+    @State private var counterID = 0
+
     /// 声音与震动
     @State private var feedback = FeedbackPlayer()
 
@@ -84,7 +96,8 @@ struct RootView: View {
                 onPinchSnap: { feedback.spinTick() },
                 flipDirection: flipDirection,
                 onShakeTap: { feedback.shakeTap() },
-                onWallKnock: { feedback.wallKnock(impact: $0) }
+                onWallKnock: { feedback.wallKnock(impact: $0) },
+                onHalfTurn: { counterStep($0) }
             )
 
             // 透明手势板，盖在 3D 画面之上
@@ -125,7 +138,9 @@ struct RootView: View {
                     lastSpeed = speed
 
                     // 大脑说了算：抛掷中它会返回空，这一划就被忽略
+                    let record = controller.stats.maxHalfTurns   // 先记下抛之前的纪录
                     if let plan = controller.requestFlip(speed: speed, distance: distance) {
+                        startCounter(final: plan.halfTurns, recordToBeat: record)
                         // 往哪边划就往哪边翻（只改翻的方向，不改翻几个半圈，结果不受影响）
                         flipDirection = SwipeDetector.flipDirection(translation: drag.translation)
                         let now = Date()
@@ -176,6 +191,18 @@ struct RootView: View {
                 .opacity(veil)
                 .allowsHitTesting(false)
 
+            // ── 这一抛转了几圈：硬币和底部那行字之间（2026-10）──
+            GeometryReader { geo in
+                if let n = counterHalfTurns {
+                    TurnCounter(halfTurns: n, isRecord: counterIsRecord,
+                                recordLanded: counterRecordLanded)
+                        .position(x: geo.size.width / 2, y: geo.size.height * 0.80)
+                        .transition(.opacity)
+                }
+            }
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+
             VStack {
                 Spacer()
                 StatusLine(phase: controller.phase, speed: lastSpeed,
@@ -222,6 +249,9 @@ struct RootView: View {
         .persistentSystemOverlays(.hidden)
         .onAppear { controller.start() }
         .onChange(of: scenePhase) { _, phase in handle(phase) }
+        .onChange(of: controller.phase) { _, phase in
+            if case .resting = phase { counterLanded() }
+        }
     }
 }
 
@@ -232,6 +262,56 @@ extension RootView {
         withAnimation(CoinSceneView.reduceMotion ? .linear(duration: 0.2)
                                                  : .easeOut(duration: 0.25)) {
             showsRecord = show
+        }
+    }
+
+    // MARK: - 这一抛转了几圈（2026-10）
+
+    /// 抛出去那一刻：从 0 开始
+    private func startCounter(final: Int, recordToBeat record: Int) {
+        counterID += 1
+        counterFinal = final
+        recordToBeat = record
+        counterIsRecord = false
+        counterRecordLanded = false
+        // 减少动态效果：不跳数，揭晓时直接给最后的数
+        if CoinSceneView.reduceMotion {
+            counterHalfTurns = nil
+            return
+        }
+        withAnimation(.easeOut(duration: 0.15)) { counterHalfTurns = 0 }
+    }
+
+    /// 硬币又翻过了半圈
+    private func counterStep(_ n: Int) {
+        guard counterHalfTurns != nil, n != counterHalfTurns else { return }
+        withAnimation(.snappy(duration: 0.16)) { counterHalfTurns = n }
+        // 在空中越过旧纪录的那一刻
+        if recordToBeat > 0, n > recordToBeat, !counterIsRecord {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { counterIsRecord = true }
+            feedback.recordBroken()
+        }
+        // 落地（数字到了总数）：破了纪录就放那道光和金环
+        if n == counterFinal, counterIsRecord { counterRecordLanded = true }
+    }
+
+    /// 停稳了（或被打断直接摆成结果）：补齐最后的数，过一会儿淡掉
+    private func counterLanded() {
+        let id = counterID
+        let final = counterFinal
+        guard id > 0 else { return }
+        if CoinSceneView.reduceMotion {
+            counterIsRecord = recordToBeat > 0 && final > recordToBeat
+            withAnimation(.linear(duration: 0.25)) { counterHalfTurns = final }
+        } else {
+            guard counterHalfTurns != nil else { return }
+            if counterHalfTurns != final { counterStep(final) }
+            if counterIsRecord { counterRecordLanded = true }
+        }
+        let hold: Double = counterIsRecord ? 2.6 : 1.3
+        DispatchQueue.main.asyncAfter(deadline: .now() + hold) {
+            guard id == counterID else { return }
+            withAnimation(.easeOut(duration: 0.6)) { counterHalfTurns = nil }
         }
     }
 

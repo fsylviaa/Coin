@@ -272,6 +272,28 @@ final class HapticPlayer {
         try? chargePlayers[key]?.start(atTime: CHHapticTimeImmediate)
     }
 
+    /// 破纪录那一刻：沉甸甸的"咚咚"两下（2026-10 计数）。只搭一次，之后反复重启。
+    private var recordPlayer: CHHapticPatternPlayer?
+
+    func recordBroken() {
+        guard hasEngine, let engine else {
+            simple.impactOccurred(intensity: 1)
+            return
+        }
+        if recordPlayer == nil {
+            let hit = { (at: TimeInterval, i: Float) in
+                CHHapticEvent(eventType: .hapticTransient,
+                              parameters: [.init(parameterID: .hapticIntensity, value: i),
+                                           .init(parameterID: .hapticSharpness, value: 0.4)],
+                              relativeTime: at)
+            }
+            if let pattern = try? CHHapticPattern(events: [hit(0, 0.95), hit(0.09, 0.7)], parameters: []) {
+                recordPlayer = try? engine.makePlayer(with: pattern)
+            }
+        }
+        try? recordPlayer?.start(atTime: CHHapticTimeImmediate)
+    }
+
     /// 没有精细震动引擎时，调用方每到一下磕碰就调一次这个。
     func simpleTap(strength: Double) {
         guard strength >= 0.12 else { return }    // 简易震动太轻了根本摸不出来
@@ -286,6 +308,7 @@ final class HapticPlayer {
         player = nil
         tickPlayer = nil          // 引擎要停了，这个播放器也跟着作废
         chargePlayers.removeAll() // 同上
+        recordPlayer = nil
         engine?.stop(completionHandler: nil)
     }
 }

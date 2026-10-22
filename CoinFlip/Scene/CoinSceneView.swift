@@ -335,6 +335,10 @@ final class CoinSceneState {
     var cameraShift = SIMD2<Float>(0, 0)
     var onShakeTap: () -> Void = {}
     var onWallKnock: (Float) -> Void = { _ in }
+    /// 翻过一个半圈就报一次"现在翻了几个半圈"（2026-10 计数）
+    var onHalfTurn: (Int) -> Void = { _ in }
+    /// 上一次报出去的半圈数，没变就不报，免得每帧都去动界面
+    var lastHalfTurnReported = -1
     /// 水平仪：硬币此刻为了"在人眼里保持水平"歪了多少（场景里的 轴 × 角度，弧度）
     var levelTilt = SIMD3<Float>(0, 0, 0)
 
@@ -385,6 +389,8 @@ struct CoinSceneView: View {
     var onShakeTap: () -> Void = {}
     /// 左右甩时硬币撞到边：声音加震动，轻重随撞击（P13）
     var onWallKnock: (Float) -> Void = { _ in }
+    /// 抛掷中每翻过半圈调一次，交出"已经翻了几个半圈"。屏幕上的计数靠它跳（2026-10）
+    var onHalfTurn: (Int) -> Void = { _ in }
 
     /// 屏幕上往右偏 ψ 度 → 翻转轴绕竖直方向转多少度。
     ///
@@ -472,6 +478,7 @@ struct CoinSceneView: View {
                 }
                 state.phase = phase
                 state.finishReported = false
+                state.lastHalfTurnReported = -1
                 state.lastActivity = Date()
                 state.pullBackStart = nil
                 state.pinchChoseNear = false
@@ -503,6 +510,7 @@ struct CoinSceneView: View {
             state.flipDirection = flipDirection
             state.onShakeTap = onShakeTap
             state.onWallKnock = onWallKnock
+            state.onHalfTurn = onHalfTurn
             if let scale = pinchScale {
                 if !state.pinching {
                     state.pinching = true
@@ -1013,6 +1021,16 @@ struct CoinSceneView: View {
             let pose = FlipAnimator.pose(at: t, plan: plan,
                                          heightScale: Double(CoinScene.heightScale),
                                          axisYaw: axisYaw)
+
+            // 计数：跟着硬币实际翻过的角度，每过半圈跳一次（2026-10）。
+            // ★ 落地之前绝不报到最后一个数 ★——落地时硬币还歪着，最后那半圈要等摇停才转完，
+            //   但落地那一刻就把总数给出来，数字和"啪"的一声同时到。不会比硬币先把结果露出来。
+            let shown = FlipAnimator.shownHalfTurns(at: t, plan: plan, degrees: pose.degrees)
+            if shown != state.lastHalfTurnReported {
+                state.lastHalfTurnReported = shown
+                let report = state.onHalfTurn
+                DispatchQueue.main.async { report(shown) }
+            }
 
             // 脱手时硬币已经被提到 launchLift，飞行曲线要从那里接上，
             // 否则会看到硬币先"掉"回地面再飞起来。

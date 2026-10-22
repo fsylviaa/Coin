@@ -140,6 +140,11 @@ final class FeedbackPlayer {
         chargeStep = 0
     }
 
+    /// 这一抛在空中越过了旧纪录（2026-10 计数）
+    func recordBroken() {
+        haptics.recordBroken()
+    }
+
     /// 自旋转过一个刻度：手上轻响一下。没有声音，只有震动。
     func spinTick() {
         haptics.spinTick()
