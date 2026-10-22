@@ -35,9 +35,21 @@ enum FlipPlanner {
     /// 最轻一划时翻几个半圈
     static let minHalfTurns: Int = 2
 
-    /// 最用力一划时翻几个半圈。
+    /// 平常力度最多翻几个半圈（3.5 圈）。
     /// 不宜太多——转得慢才有分量，转成陀螺就只剩炫技了。
-    static let maxHalfTurns: Int = 7
+    /// 所以绝大多数抛掷都落在 minHalfTurns ~ 这个数之间，手感和以前一样。
+    static let normalMaxHalfTurns: Int = 7
+
+    /// 用力程度超过这个值，就进入"爆发区"：圈数从 normalMaxHalfTurns 往上加，
+    /// 一直加到 maxHalfTurns。只有又快又长的狠甩才进得去（2026-10 作者要的：
+    /// 用力抛能转更多圈，单抛纪录才有得破）。
+    static let burstForce: Double = 0.85
+
+    /// 最用力一划时翻几个半圈（6 圈）。
+    /// ★ 别随手往上加：飞行最长才 1 秒，而且八成的转量挤在上升那半程，
+    ///   12 个半圈时上升段每帧（60Hz）已经转 56°。再多，每帧转近 90°，
+    ///   币面一闪一闪看不清在翻，像频闪，不像转得快。
+    static let maxHalfTurns: Int = 12
 
     /// 小跳之后，边缘磕碰平面多少次。
     /// 这才是"硬币躺平前那阵嗒嗒嗒"的主体。
@@ -168,9 +180,8 @@ enum FlipPlanner {
         let height = lerp(from: style.minHeight, to: style.maxHeight, factor: force)
 
         // 3. 用力程度决定翻几个半圈，再修正奇偶，保证最终朝向等于结果
-        let baseHalfTurns = minHalfTurns
-            + Int((Double(maxHalfTurns - minHalfTurns) * force).rounded())
-        let halfTurns = makeHalfTurns(baseHalfTurns: baseHalfTurns,
+        let base = Self.baseHalfTurns(force: force)
+        let halfTurns = makeHalfTurns(baseHalfTurns: base,
                                       startFace: startFace,
                                       result: result)
 
@@ -237,6 +248,21 @@ enum FlipPlanner {
     /// 一旦有人改坏了动画逻辑，测试就会立刻发现。
     static func finalFace(of plan: FlipPlan) -> CoinFace {
         plan.halfTurns % 2 == 0 ? plan.startFace : plan.startFace.opposite
+    }
+
+    /// 用力程度（0~1）换算成"大概翻几个半圈"，还没修正奇偶。
+    ///
+    /// 两段：平常力度（0 ~ burstForce）从 minHalfTurns 均匀涨到 normalMaxHalfTurns；
+    /// 爆发区（burstForce ~ 1）再从 normalMaxHalfTurns 涨到 maxHalfTurns。
+    /// 一路只涨不跌，越用力转得越多。
+    static func baseHalfTurns(force: Double) -> Int {
+        let f = min(max(force, 0), 1)
+        if f <= burstForce {
+            let p = f / burstForce
+            return minHalfTurns + Int((Double(normalMaxHalfTurns - minHalfTurns) * p).rounded())
+        }
+        let p = (f - burstForce) / (1 - burstForce)
+        return normalMaxHalfTurns + Int((Double(maxHalfTurns - normalMaxHalfTurns) * p).rounded())
     }
 
     // MARK: - 小工具

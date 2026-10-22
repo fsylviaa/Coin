@@ -145,4 +145,21 @@ final class FlipPlanTests: XCTestCase {
             }
         }
     }
+
+    /// 用力抛能转更多圈（2026-10）：
+    /// 平常力度的上限和以前一样；只有爆发区才往上加；一路只涨不跌。
+    func testBurstZoneSpinsMore() {
+        XCTAssertEqual(FlipPlanner.baseHalfTurns(force: 0), FlipPlanner.minHalfTurns)
+        XCTAssertEqual(FlipPlanner.baseHalfTurns(force: FlipPlanner.burstForce),
+                       FlipPlanner.normalMaxHalfTurns)
+        XCTAssertEqual(FlipPlanner.baseHalfTurns(force: 1), FlipPlanner.maxHalfTurns)
+        XCTAssertEqual(FlipPlanner.baseHalfTurns(force: 5), FlipPlanner.maxHalfTurns, "超出范围要贴边")
+        var last = 0
+        for i in 0...100 {
+            let n = FlipPlanner.baseHalfTurns(force: Double(i) / 100)
+            XCTAssertGreaterThanOrEqual(n, last, "force=\(i)% 时圈数反而变少了")
+            last = n
+        }
+        XCTAssertGreaterThan(FlipPlanner.maxHalfTurns, FlipPlanner.normalMaxHalfTurns)
+    }
 }
