@@ -28,13 +28,17 @@ enum CoinScene {
     // 常态镜头：低角度看过去，硬币是一枚躺在平面上的扁椭圆
     static let elevationFar: Float = 28          // 离地角度（度）
     static let distanceFar: Float = 3.3
-    /// 镜头望向的点比硬币高一点，硬币就落在画面偏下，上方留出飞行空间
-    static let lookUpFar: Float = 0.20
+    /// 镜头望向的点比硬币高一点，硬币就落在画面偏下，上方留出飞行空间。
+    /// 2026-10 作者要硬币往下挪一点：0.20 → 0.34。
+    /// 算出来静止时硬币中心从离屏幕顶 57% 挪到 62%；最用力那一抛的最高点从 32% 挪到 38%。
+    static let lookUpFar: Float = 0.34
 
     // 特写镜头：绕到上方俯看，图案完整呈现
     static let elevationNear: Float = 78
     static let distanceNear: Float = 2.5
-    static let lookUpNear: Float = 0.04
+    /// ★ 特写时硬币要正好在屏幕正中（作者要求）。★
+    /// 硬币静止时圆心就在原点，所以望向原点（0）就是正中；原来 0.04 会偏下约半个百分点。
+    static let lookUpNear: Float = 0
 
     static let fieldOfView: Float = 40
 
