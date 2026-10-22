@@ -104,7 +104,14 @@ struct RootView: View {
                     feedback.warmUp()
                 }
 
+                // 蓄力：往上拖时手上一格一格地"嗒"，越往上越重（2026-10）。
+                // 只在能抛的时候、而且明显是往上拖（不是横拨）时才震。
+                if controller.phase.acceptsFlip && dragUp > abs(dragSide) {
+                    feedback.charge(dragUp: dragUp)
+                }
+
             } onDragEnded: { drag in
+                feedback.resetCharge()
                 dragUp = 0
                 dragSide = 0
                 dragging = false

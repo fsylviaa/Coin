@@ -70,6 +70,56 @@ enum HapticTuning {
     }
 
     static func clamp(_ v: Float) -> Float { min(max(v, 0), 1) }
+
+    // MARK: - 蓄力（2026-10）
+
+    /// 蓄力每一格的轻重：最开头几乎摸不到，越往上拖越重。level 是 0~1。
+    static func chargeIntensity(_ level: Float) -> Float {
+        clamp((0.14 + 0.46 * pow(min(max(level, 0), 1), 1.3)) * gain)
+    }
+
+    /// 蓄力每一格的软硬：越往上越脆，像弹簧越拧越紧。
+    static func chargeSharpness(_ level: Float) -> Float {
+        clamp(0.50 + 0.35 * min(max(level, 0), 1))
+    }
+
+    /// 拖满那一下：明显重一截、偏沉，告诉手"到头了"
+    static let chargeFullIntensity: Float = 0.85
+    static let chargeFullSharpness: Float = 0.35
+
+    /// 松手那一记：抛得越狠越重（force 是 0~1，按抛起高度算）
+    static func releaseIntensity(_ force: Double) -> Float {
+        clamp((tossIntensity + 0.45 * Float(min(max(force, 0), 1))) * gain)
+    }
+}
+
+/// 蓄力的"刻度尺"（2026-10）。
+///
+/// 往上拖的距离被切成一格一格，每拖过新的一格，手上"嗒"一下，越往上越重；
+/// 拖到 FlipPlanner.maxDistance（"划得远"这一项满分）时，重重地来一下"满了"。
+///
+/// 只认**拖到过的最高处**：手指往回缩再往上，不会把走过的格子再震一遍，
+/// 免得手指一抖就嗒嗒乱响。
+enum ChargeMeter {
+
+    /// 一共几格（不含"满了"那一下）
+    static let steps = 12
+
+    /// 一格多长（点）
+    static var stepDistance: Double { FlipPlanner.maxDistance / Double(steps) }
+
+    /// 往上拖了 dragUp 点，到了第几格（0 ~ steps）
+    static func step(dragUp: Double) -> Int {
+        guard dragUp > 0 else { return 0 }
+        // 先判"满了"，别让小数误差把正好拖满算成差一格
+        if dragUp >= FlipPlanner.maxDistance { return steps }
+        return min(Int(dragUp / stepDistance), steps - 1)
+    }
+
+    /// 第几格换算成 0~1
+    static func level(step: Int) -> Float {
+        Float(min(max(step, 0), steps)) / Float(steps)
+    }
 }
 
 /// 负责把一次抛掷的磕碰表变成一串震动。
@@ -81,6 +131,9 @@ final class HapticPlayer {
     private var player: CHHapticPatternPlayer?
     /// 自旋刻度那一下。只搭一次，反复重启
     private var tickPlayer: CHHapticPatternPlayer?
+    /// 蓄力每一格各一个播放器，第一次用到时才搭，之后反复重启。
+    /// 键 0 ~ steps-1 是普通格，steps 是"满了"那一下。
+    private var chargePlayers: [Int: CHHapticPatternPlayer] = [:]
 
     /// 这台设备有没有精细震动引擎。没有就用下面这个简易的顶上。
     private let hasEngine = CHHapticEngine.capabilitiesForHardware().supportsHaptics
@@ -118,13 +171,16 @@ final class HapticPlayer {
     func play(_ plan: FlipPlan, elapsed: TimeInterval) -> Bool {
         guard hasEngine, let engine else { return false }
 
+        // 抛得多狠（0~1），按抛起高度算。松手那一记跟着它变重
+        let force = StyleProfile.silver.heightLevel(plan.height)
+
         var events: [CHHapticEvent] = [
-            // 脱手那一下轻点，让"扔出去了"这件事有个回应
+            // 脱手那一下：蓄完力松手，干脆地"啪"一记。抛得越狠越重（2026-10 蓄力）
             CHHapticEvent(eventType: .hapticTransient,
                           parameters: [
                             .init(parameterID: .hapticIntensity,
-                                  value: HapticTuning.clamp(HapticTuning.tossIntensity * HapticTuning.gain)),
-                            .init(parameterID: .hapticSharpness, value: 0.85)],
+                                  value: HapticTuning.releaseIntensity(force)),
+                            .init(parameterID: .hapticSharpness, value: 0.9)],
                           relativeTime: 0)
         ]
 
@@ -189,6 +245,33 @@ final class HapticPlayer {
         return try? engine.makePlayer(with: pattern)
     }
 
+    /// 蓄力：拖到了第 step 格（step == ChargeMeter.steps 就是"满了"）。
+    ///
+    /// 和自旋刻度一样，播放器搭好就留着反复用，主线程只做一次"重启"。
+    func chargeTick(step: Int) {
+        let full = step >= ChargeMeter.steps
+        let level = ChargeMeter.level(step: step)
+        let intensity = full ? HapticTuning.chargeFullIntensity : HapticTuning.chargeIntensity(level)
+        let sharpness = full ? HapticTuning.chargeFullSharpness : HapticTuning.chargeSharpness(level)
+
+        guard hasEngine, let engine else {
+            simple.impactOccurred(intensity: CGFloat(intensity))
+            return
+        }
+        let key = min(max(step, 0), ChargeMeter.steps)
+        if chargePlayers[key] == nil {
+            let event = CHHapticEvent(
+                eventType: .hapticTransient,
+                parameters: [.init(parameterID: .hapticIntensity, value: intensity),
+                             .init(parameterID: .hapticSharpness, value: sharpness)],
+                relativeTime: 0)
+            if let pattern = try? CHHapticPattern(events: [event], parameters: []) {
+                chargePlayers[key] = try? engine.makePlayer(with: pattern)
+            }
+        }
+        try? chargePlayers[key]?.start(atTime: CHHapticTimeImmediate)
+    }
+
     /// 没有精细震动引擎时，调用方每到一下磕碰就调一次这个。
     func simpleTap(strength: Double) {
         guard strength >= 0.12 else { return }    // 简易震动太轻了根本摸不出来
@@ -202,6 +285,7 @@ final class HapticPlayer {
         try? player?.stop(atTime: CHHapticTimeImmediate)
         player = nil
         tickPlayer = nil          // 引擎要停了，这个播放器也跟着作废
+        chargePlayers.removeAll() // 同上
         engine?.stop(completionHandler: nil)
     }
 }

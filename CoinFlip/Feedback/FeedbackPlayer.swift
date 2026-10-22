@@ -121,6 +121,25 @@ final class FeedbackPlayer {
         }
     }
 
+    // MARK: - 蓄力（2026-10）
+
+    /// 这一次往上拖，已经震到第几格了（只认拖到过的最高处）
+    private var chargeStep = 0
+
+    /// 手指往上拖的过程中每次移动都调。拖过新的一格就震一下，越往上越重，
+    /// 拖满了重重来一下。只有震动，没有声音，画面也不停。
+    func charge(dragUp: CGFloat) {
+        let step = ChargeMeter.step(dragUp: Double(dragUp))
+        guard step > chargeStep else { return }
+        chargeStep = step
+        haptics.chargeTick(step: step)
+    }
+
+    /// 手指松开（不管抛没抛出去）就清零，下一次从头数格子
+    func resetCharge() {
+        chargeStep = 0
+    }
+
     /// 自旋转过一个刻度：手上轻响一下。没有声音，只有震动。
     func spinTick() {
         haptics.spinTick()
