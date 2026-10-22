@@ -40,8 +40,20 @@ struct StyleProfile {
     /// 抛起高度的下限（单位：米）。轻轻一划也至少抛这么高。
     let minHeight: Double
 
+    /// 平常力度最高抛到多高（单位：米）。只有狠甩进了"爆发区"才会超过它
+    /// （FlipPlanner.burstForce，和多转几圈是同一个门槛）。
+    /// 落地后的弹跳、阴影、抛起那声的响度都按它算，所以平常的手感和以前一样。
+    let normalMaxHeight: Double
+
     /// 抛起高度的上限（单位：米）。再用力也不会超过这个高度，免得飞出屏幕。
     let maxHeight: Double
+
+    /// 这个高度算平常力度里的几成（0~1）。爆发区一律算 1。
+    /// 声音、震动的轻重用它，免得加高了上限以后平常的抛掷都变轻了。
+    func heightLevel(_ height: Double) -> Double {
+        let span = max(normalMaxHeight - minHeight, 0.0001)
+        return min(max((height - minHeight) / span, 0), 1)
+    }
 }
 
 extension StyleProfile {
@@ -57,6 +69,10 @@ extension StyleProfile {
         landSound: "land_silver",
         bounciness: 0.2,
         minHeight: 0.12,
-        maxHeight: 0.65
+        normalMaxHeight: 0.65,
+        // 2026-10 作者要"可以抛得更高"：0.65 → 1.0，只有狠甩才到得了。
+        // 算过：硬币往下挪之后，最高时硬币上沿离屏幕顶约 15%，不出画；
+        // 空中时间 1.02 → 1.26 秒，6 圈时每帧转的角度从 56° 降到 46°，没那么闪了。
+        maxHeight: 1.0
     )
 }

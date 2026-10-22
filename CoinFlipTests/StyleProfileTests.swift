@@ -10,7 +10,8 @@ final class StyleProfileTests: XCTestCase {
     /// 抛起高度的下限要大于 0，并且小于上限
     func testSilverHeightRange() {
         XCTAssertGreaterThan(StyleProfile.silver.minHeight, 0)
-        XCTAssertLessThan(StyleProfile.silver.minHeight, StyleProfile.silver.maxHeight)
+        XCTAssertLessThan(StyleProfile.silver.minHeight, StyleProfile.silver.normalMaxHeight)
+        XCTAssertLessThanOrEqual(StyleProfile.silver.normalMaxHeight, StyleProfile.silver.maxHeight)
     }
 
     /// 弹性要在 0 和 1 之间

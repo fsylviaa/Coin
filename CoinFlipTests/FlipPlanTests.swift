@@ -101,10 +101,32 @@ final class FlipPlanTests: XCTestCase {
         XCTAssertGreaterThan(fastOnly.height, longOnly.height, "速度应该占大头")
     }
 
-    /// 整个动画不能太长，否则等得不耐烦。最用力一划也要在 2.5 秒内停稳。
+    /// 整个动画不能太长，否则等得不耐烦。
+    /// 平常力度要在 2.5 秒内停稳；狠甩进爆发区（2026-10 加高）多出来的是空中时间，
+    /// 那段是看点不是等待，放宽到 2.7 秒。
     func testTotalDurationIsAcceptable() {
         let plan = FlipPlanner.makePlan(speed: 100_000, distance: 10_000, startFace: .sun, result: .moon, style: style)
-        XCTAssertLessThan(plan.endTime, 2.5, "最用力一划要 \(plan.endTime) 秒才停稳，太久了")
+        XCTAssertLessThan(plan.endTime, 2.7, "最用力一划要 \(plan.endTime) 秒才停稳，太久了")
+        for speed in stride(from: 0.0, through: 8000.0, by: 50.0) {
+            let force = FlipPlanner.forceFactor(speed: speed, distance: speed / 10)
+            guard force <= FlipPlanner.burstForce else { continue }
+            let p = FlipPlanner.makePlan(speed: speed, distance: speed / 10,
+                                         startFace: .sun, result: .moon, style: style)
+            XCTAssertLessThan(p.endTime, 2.5, "平常力度（速度 \(Int(speed))）要 \(p.endTime) 秒才停稳")
+        }
+    }
+
+    /// 可以抛得更高（2026-10）：平常力度最多到 normalMaxHeight，只有爆发区才更高
+    func testOnlyBurstGoesHigher() {
+        XCTAssertEqual(FlipPlanner.height(force: FlipPlanner.burstForce, style: style),
+                       style.normalMaxHeight, accuracy: 1e-9)
+        XCTAssertEqual(FlipPlanner.height(force: 1, style: style), style.maxHeight)
+        var last = 0.0
+        for i in 0...100 {
+            let h = FlipPlanner.height(force: Double(i) / 100, style: style)
+            XCTAssertGreaterThanOrEqual(h, last, "force=\(i)% 时反而抛得更低")
+            last = h
+        }
     }
 
     /// ★ 大跳 + 小跳 + 嗒嗒嗒，时长要有上限 ★

@@ -144,8 +144,9 @@ enum GroundShadow {
     }
 
     /// 硬币最高能升到多高。用来把高度折算成 0~1。
+    /// 按平常力度的上限算（爆发区更高时阴影就停在最淡那一档），平常的阴影收放和以前一样。
     private static let maxLift: Float =
-        CoinScene.heightScale * Float(StyleProfile.silver.maxHeight)
+        CoinScene.heightScale * Float(StyleProfile.silver.normalMaxHeight)
 
     // MARK: - 材质
 

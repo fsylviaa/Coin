@@ -136,9 +136,7 @@ final class FeedbackPlayer {
     /// 抛起的那一声。抛得越高，弹得越响。
     private func playToss(force: Double) {
         guard let player = tossPlayer else { return }
-        let style = StyleProfile.silver
-        let span = max(style.maxHeight - style.minHeight, 0.0001)
-        let t = min(max((force - style.minHeight) / span, 0), 1)
+        let t = StyleProfile.silver.heightLevel(force)
 
         audioQueue.async {
             player.currentTime = 0

@@ -177,7 +177,7 @@ enum FlipPlanner {
         let force = forceFactor(speed: speed, distance: distance)
 
         // 2. 用力程度决定抛多高
-        let height = lerp(from: style.minHeight, to: style.maxHeight, factor: force)
+        let height = Self.height(force: force, style: style)
 
         // 3. 用力程度决定翻几个半圈，再修正奇偶，保证最终朝向等于结果
         let base = Self.baseHalfTurns(force: force)
@@ -191,7 +191,9 @@ enum FlipPlanner {
         // 5. 落地之后：大跳 → 小跳 → 一连串越来越密的边缘磕碰（作者要的节奏）。
         //    震动和声音照同一张表：落地最重（带闷响）、大跳落回第二重（带闷响）、
         //    小跳落回第三下、然后是轻轻的"嗒嗒嗒"。
-        let hopHeight = (hopFloor + height * style.bounciness) * personality.hopScale
+        // 弹跳按平常力度的高度算：爆发区抛得再高，落地后的节奏也和以前一样，不会拖长
+        let hopHeight = (hopFloor + min(height, style.normalMaxHeight) * style.bounciness)
+            * personality.hopScale
         let hop = FlipPlan.Bounce(height: hopHeight,
                                   duration: flightDuration(height: hopHeight))
         // 第二下小跳：只在中等以上力度出现
@@ -248,6 +250,18 @@ enum FlipPlanner {
     /// 一旦有人改坏了动画逻辑，测试就会立刻发现。
     static func finalFace(of plan: FlipPlan) -> CoinFace {
         plan.halfTurns % 2 == 0 ? plan.startFace : plan.startFace.opposite
+    }
+
+    /// 用力程度（0~1）换算成抛多高。和圈数一样分两段：
+    /// 平常力度（0 ~ burstForce）从 minHeight 涨到 normalMaxHeight；
+    /// 爆发区（burstForce ~ 1）再从 normalMaxHeight 涨到 maxHeight。
+    static func height(force: Double, style: StyleProfile) -> Double {
+        let f = min(max(force, 0), 1)
+        if f <= burstForce {
+            return lerp(from: style.minHeight, to: style.normalMaxHeight, factor: f / burstForce)
+        }
+        return lerp(from: style.normalMaxHeight, to: style.maxHeight,
+                    factor: (f - burstForce) / (1 - burstForce))
     }
 
     /// 用力程度（0~1）换算成"大概翻几个半圈"，还没修正奇偶。
