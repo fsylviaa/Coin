@@ -225,6 +225,17 @@ struct RecordCard: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            // 作者署名（2026-10，作者定的写法）。
+            // ★ 用 ©，不用 ® ★：® 只能用在已注册的商标上，没注册就用算冒充注册商标。
+            //   年份是首次发布那年，以后不用年年改
+            Text("© 2026 F·Sylvia")
+                .font(light(10))
+                .tracking(2)
+                .opacity(0.22)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 16)
+                .accessibilityLabel("版权所有 2026 F·Sylvia")
         }
     }
 
