@@ -45,6 +45,9 @@ struct FlipStats: Codable, Equatable {
     /// 第一次抛是什么时候（"从 2026 年 10 月开始"）
     var firstFlip: Date?
 
+    /// 最快的一划（就是最高分，点/秒，2026-10）
+    var maxSpeed = 0
+
     /// 到这几次时，底部那行字会多一句"No. 100"
     static let milestones: Set<Int> = [100, 500, 1000]
 
@@ -78,6 +81,11 @@ struct FlipStats: Codable, Equatable {
         totalHalfTurns += max(halfTurns, 0)
 
         if firstFlip == nil { firstFlip = date }
+    }
+
+    /// 一抛停稳，得了 points 分。只留最高的
+    mutating func recordScore(_ points: Int) {
+        maxSpeed = max(maxSpeed, points)
     }
 
     // MARK: - 给卡片看的
@@ -114,7 +122,7 @@ struct FlipStats: Codable, Equatable {
     // 缺的那项按 0 / 空算——不会因为升级 App 就把记录清掉。
     private enum CodingKeys: String, CodingKey {
         case total, sun, moon, lastFace, streak, longestStreak,
-             todayKey, todayCount, maxHalfTurns, totalHalfTurns, firstFlip
+             todayKey, todayCount, maxHalfTurns, totalHalfTurns, firstFlip, maxSpeed
     }
 
     init(from decoder: Decoder) throws {
@@ -130,5 +138,6 @@ struct FlipStats: Codable, Equatable {
         maxHalfTurns   = try c.decodeIfPresent(Int.self, forKey: .maxHalfTurns) ?? 0
         totalHalfTurns = try c.decodeIfPresent(Int.self, forKey: .totalHalfTurns) ?? 0
         firstFlip      = try c.decodeIfPresent(Date.self, forKey: .firstFlip)
+        maxSpeed       = try c.decodeIfPresent(Int.self, forKey: .maxSpeed) ?? 0
     }
 }

@@ -71,6 +71,10 @@ struct RootView: View {
     /// 每一抛一个编号。淡出是延时做的，编号对不上说明已经开始了下一抛，就别去淡它
     @State private var counterID = 0
 
+    // ── 分数（2026-10）──
+    /// 这一划的速度，就是这一抛的分数
+    @State private var scoreSpeed: Double = 0
+
     /// 声音与震动
     @State private var feedback = FeedbackPlayer()
 
@@ -138,9 +142,9 @@ struct RootView: View {
                     lastSpeed = speed
 
                     // 大脑说了算：抛掷中它会返回空，这一划就被忽略
-                    let record = controller.stats.maxHalfTurns   // 先记下抛之前的纪录
+                    let record = controller.stats.maxSpeed       // 先记下抛之前的纪录
                     if let plan = controller.requestFlip(speed: speed, distance: distance) {
-                        startCounter(final: plan.halfTurns, recordToBeat: record)
+                        startCounter(plan: plan, speed: speed, recordToBeat: record)
                         // 往哪边划就往哪边翻（只改翻的方向，不改翻几个半圈，结果不受影响）
                         flipDirection = SwipeDetector.flipDirection(translation: drag.translation)
                         let now = Date()
@@ -194,8 +198,9 @@ struct RootView: View {
             // ── 这一抛转了几圈：硬币和底部那行字之间（2026-10）──
             GeometryReader { geo in
                 if let n = counterHalfTurns {
-                    TurnCounter(halfTurns: n, isRecord: counterIsRecord,
-                                recordLanded: counterRecordLanded)
+                    let points = score(halfTurns: n)
+                    TurnCounter(text: points.formatted(), value: Double(points),
+                                isRecord: counterIsRecord, recordLanded: counterRecordLanded)
                         .position(x: geo.size.width / 2, y: geo.size.height * 0.80)
                         .transition(.opacity)
                 }
@@ -265,12 +270,18 @@ extension RootView {
         }
     }
 
-    // MARK: - 这一抛转了几圈（2026-10）
+    // MARK: - 分数（2026-10）
+
+    /// 翻了 n 个半圈时，屏幕上该滚到多少
+    private func score(halfTurns n: Int) -> Int {
+        FlipScore.points(speed: scoreSpeed, halfTurns: n, of: counterFinal)
+    }
 
     /// 抛出去那一刻：从 0 开始
-    private func startCounter(final: Int, recordToBeat record: Int) {
+    private func startCounter(plan: FlipPlan, speed: Double, recordToBeat record: Int) {
         counterID += 1
-        counterFinal = final
+        counterFinal = plan.halfTurns
+        scoreSpeed = speed
         recordToBeat = record
         counterIsRecord = false
         counterRecordLanded = false
@@ -282,26 +293,27 @@ extension RootView {
         withAnimation(.easeOut(duration: 0.15)) { counterHalfTurns = 0 }
     }
 
-    /// 硬币又翻过了半圈
+    /// 硬币又翻过了半圈：分数往上滚一截
     private func counterStep(_ n: Int) {
         guard counterHalfTurns != nil, n != counterHalfTurns else { return }
         withAnimation(.snappy(duration: 0.16)) { counterHalfTurns = n }
-        // 在空中越过旧纪录的那一刻
-        if recordToBeat > 0, n > recordToBeat, !counterIsRecord {
+        // 在空中越过最高分的那一刻
+        if recordToBeat > 0, score(halfTurns: n) > recordToBeat, !counterIsRecord {
             withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { counterIsRecord = true }
             feedback.recordBroken()
         }
-        // 落地（数字到了总数）：破了纪录就放那道光和金环
+        // 落地（到了最后的分数）：破了纪录就放那道光和金环
         if n == counterFinal, counterIsRecord { counterRecordLanded = true }
     }
 
-    /// 停稳了（或被打断直接摆成结果）：补齐最后的数，过一会儿淡掉
+    /// 停稳了（或被打断直接摆成结果）：补齐最后的分数，记纪录，过一会儿淡掉
     private func counterLanded() {
         let id = counterID
         let final = counterFinal
         guard id > 0 else { return }
+        controller.recordScore(score(halfTurns: final))
         if CoinSceneView.reduceMotion {
-            counterIsRecord = recordToBeat > 0 && final > recordToBeat
+            counterIsRecord = recordToBeat > 0 && score(halfTurns: final) > recordToBeat
             withAnimation(.linear(duration: 0.25)) { counterHalfTurns = final }
         } else {
             guard counterHalfTurns != nil else { return }
@@ -390,10 +402,7 @@ private struct StatusLine: View {
     }
 
     private var text: String {
-        #if DEBUG
-        // 开发版多挂一个上划速度，调手感时要看。正式版没有。
-        if case .flipping = phase { return "Coin: \(word) · \(Int(speed))" }
-        #endif
+        // 开发版原来在这里挂一个上划速度；2026-10 起它就是屏幕上的分数，这里不再重复
         return "Coin: \(word)" + milestoneSuffix
     }
 

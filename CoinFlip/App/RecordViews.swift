@@ -206,6 +206,7 @@ struct RecordCard: View {
                 row("今天", "\(stats.today(now)) 次")
                 row("转得最多的一抛", "\(FlipStats.turnsText(halfTurns: stats.maxHalfTurns)) 圈")
                 row("一共翻了", "\(FlipStats.turnsText(halfTurns: stats.totalHalfTurns)) 圈")
+                row("最快一划", "\(stats.maxSpeed.formatted())")
             }
 
             hairline

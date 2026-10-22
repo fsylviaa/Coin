@@ -1,6 +1,7 @@
-// 这一抛转了几圈（2026-10，作者要的"抛的同时数字就跳"）。
+// 抛的时候跳动的那个数字（2026-10，作者要的"抛的同时数字就跳"）。
 //
-// 抛出去那一刻从 0 开始，硬币每翻过半圈跳 0.5，落地那一下停在最后的数。
+// 现在显示的是积分（见 FlipScore）：抛出去那一刻从 0 开始，硬币每翻过半圈往上滚一截，
+// 落地那一下停在最后的数。
 // 停稳后一会儿淡掉。只有数字，没有字。
 //
 // 破纪录（这一抛超过了以前"转得最多的一抛"）时，特效不一样：
@@ -15,8 +16,10 @@ import SwiftUI
 
 struct TurnCounter: View {
 
-    /// 已经翻了几个半圈
-    let halfTurns: Int
+    /// 显示的数字（"3.5"、"12"）
+    let text: String
+    /// 数字的大小，只用来让跳动时的滚动方向对（往上涨）
+    let value: Double
     /// 这一抛已经超过旧纪录了
     let isRecord: Bool
     /// 破了纪录而且已经落地：放落地那一下的光
@@ -36,18 +39,17 @@ struct TurnCounter: View {
                 }
         }
         .accessibilityElement()
-        .accessibilityLabel("转了 \(FlipStats.turnsText(halfTurns: halfTurns)) 圈"
-                            + (isRecord ? "，新纪录" : ""))
+        .accessibilityLabel(text + (isRecord ? "，新纪录" : ""))
     }
 
     private var number: some View {
-        Text(FlipStats.turnsText(halfTurns: halfTurns))
+        Text(text)
             .font(.system(size: 46, weight: .ultraLight))
             .monospacedDigit()
             .foregroundStyle(isRecord ? Self.gold : Color.white.opacity(0.82))
             .shadow(color: isRecord ? Self.gold.opacity(0.55) : .clear, radius: isRecord ? 14 : 0)
             .scaleEffect(isRecord ? 1.18 : 1)
-            .contentTransition(.numericText(value: Double(halfTurns)))
+            .contentTransition(.numericText(value: value))
     }
 }
 

@@ -110,6 +110,13 @@ final class CoinController {
         milestone = stats.isMilestone ? stats.total : nil
     }
 
+    /// 一抛停稳后的分数（就是这一划的速度，2026-10）。破了纪录才需要存
+    func recordScore(_ points: Int) {
+        guard points > stats.maxSpeed else { return }
+        stats.recordScore(points)
+        store.saveStats(stats)
+    }
+
     /// 卡片上点"清零"并确认后调用。只清记录，不动"最后一次结果"。
     func resetStats() {
         stats = FlipStats()
