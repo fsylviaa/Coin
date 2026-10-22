@@ -59,21 +59,25 @@ struct RootView: View {
     /// 这一次往哪个方向翻（度，0 是正上方，往右为正）。跟着手指上划的方向（P09）
     @State private var flipDirection: Double = 0
 
-    // ── 这一抛转了几圈（2026-10）──
-    /// 屏幕上的计数现在显示几个半圈；nil 表示不显示
-    @State private var counterHalfTurns: Int?
-    /// 这一次的总半圈数（落地时用来补齐，减少动态效果模式下也靠它）
+    // ── 这一抛（2026-10）──
+    /// 这一次的总半圈数（落地那一下用它认出来）
     @State private var counterFinal = 0
-    /// 抛之前的纪录（"转得最多的一抛"）。0 表示还没有纪录，这一抛不算破纪录
+    /// 抛之前的"最快一划"。0 表示还没有纪录，这一抛不算破纪录
     @State private var recordToBeat = 0
-    @State private var counterIsRecord = false
-    @State private var counterRecordLanded = false
-    /// 每一抛一个编号。淡出是延时做的，编号对不上说明已经开始了下一抛，就别去淡它
+    /// 每一抛一个编号。浮现、烧掉都是延时做的，编号对不上说明已经开始了下一抛
     @State private var counterID = 0
-
-    // ── 分数（2026-10）──
-    /// 这一划的速度，就是这一抛的分数
+    /// 这一划的速度（分数）。屏幕上不显示了，只记进"最快一划"
     @State private var scoreSpeed: Double = 0
+
+    // ── 答案（2026-10，"答案之书"）──
+    @State private var answer: Answer?
+    @State private var answerShown = false
+    /// 开始烧的时刻；nil 表示还没开始烧
+    @State private var answerBurnStart: Date?
+    @State private var answerBurnSeconds: Double = 1.4
+    /// 每换一句就加一，烧完去掉时认得出是不是同一句
+    @State private var answerToken = 0
+    @State private var answerDeck = AnswerBook.Deck()
 
     /// 硬币正在满屏乱撞（2026-10）。这时候不接受上划、横拨
     @State private var chaosActive = false
@@ -202,14 +206,12 @@ struct RootView: View {
                 .opacity(veil)
                 .allowsHitTesting(false)
 
-            // ── 这一抛转了几圈：硬币和底部那行字之间（2026-10）──
+            // ── 答案：硬币和底部那行字之间（2026-10）──
             GeometryReader { geo in
-                if let n = counterHalfTurns {
-                    let points = score(halfTurns: n)
-                    TurnCounter(text: points.formatted(), value: Double(points),
-                                isRecord: counterIsRecord, recordLanded: counterRecordLanded)
+                if let a = answer {
+                    AnswerView(answer: a, burnStart: answerBurnStart, burnSeconds: answerBurnSeconds)
+                        .opacity(answerShown ? 1 : 0)
                         .position(x: geo.size.width / 2, y: geo.size.height * 0.80)
-                        .transition(.opacity)
                 }
             }
             .ignoresSafeArea()
@@ -277,60 +279,78 @@ extension RootView {
         }
     }
 
-    // MARK: - 分数（2026-10）
+    // MARK: - 答案（2026-10）
+    //
+    // 屏幕上原来跟着翻转往上滚的分数，换成了"答案之书"的一句话（作者要的）。
+    // 分数（这一划的速度）不再显示，只记进卡片里的"最快一划"；破纪录时手上咚咚两下。
 
-    /// 翻了 n 个半圈时，屏幕上该滚到多少
-    private func score(halfTurns n: Int) -> Int {
-        FlipScore.points(speed: scoreSpeed, halfTurns: n, of: counterFinal)
-    }
+    /// 停稳后答案停留多久才烧掉（秒）
+    private static let answerHold: Double = 4.5
+    /// 比停稳早多少秒开始浮现（作者：快落定前淡淡浮出来）
+    private static let answerLead: Double = 0.6
 
-    /// 抛出去那一刻：从 0 开始
+    /// 抛出去那一刻：上一句还在就先烧掉；排好这一句什么时候浮现
     private func startCounter(plan: FlipPlan, speed: Double, recordToBeat record: Int) {
         counterID += 1
+        let id = counterID
         counterFinal = plan.halfTurns
         scoreSpeed = speed
         recordToBeat = record
-        counterIsRecord = false
-        counterRecordLanded = false
-        // 减少动态效果：不跳数，揭晓时直接给最后的数
-        if CoinSceneView.reduceMotion {
-            counterHalfTurns = nil
-            return
+        burnAnswer(seconds: 0.6)
+        // 减少动态效果：揭晓时（counterLanded）直接淡入
+        if CoinSceneView.reduceMotion { return }
+        let appear = max(plan.endTime - Self.answerLead, 0.7)   // 至少等上一句烧完
+        DispatchQueue.main.asyncAfter(deadline: .now() + appear) {
+            guard id == counterID else { return }
+            showAnswer()
         }
-        withAnimation(.easeOut(duration: 0.15)) { counterHalfTurns = 0 }
     }
 
-    /// 硬币又翻过了半圈：分数往上滚一截
+    /// 硬币又翻过了半圈。落地那一下（到了总数），破了"最快一划"就咚咚两下
     private func counterStep(_ n: Int) {
-        guard counterHalfTurns != nil, n != counterHalfTurns else { return }
-        withAnimation(.snappy(duration: 0.16)) { counterHalfTurns = n }
-        // 在空中越过最高分的那一刻
-        if recordToBeat > 0, score(halfTurns: n) > recordToBeat, !counterIsRecord {
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { counterIsRecord = true }
+        guard n == counterFinal else { return }
+        if recordToBeat > 0, FlipScore.final(speed: scoreSpeed) > recordToBeat {
             feedback.recordBroken()
+            recordToBeat = Int.max                              // 只震一次
         }
-        // 落地（到了最后的分数）：破了纪录就放那道光和金环
-        if n == counterFinal, counterIsRecord { counterRecordLanded = true }
     }
 
-    /// 停稳了（或被打断直接摆成结果）：补齐最后的分数，记纪录，过一会儿淡掉
+    /// 停稳了（或被打断直接摆成结果）：记分数；答案还没出来就补上；停留一会儿后烧掉
     private func counterLanded() {
         let id = counterID
-        let final = counterFinal
         guard id > 0 else { return }
-        controller.recordScore(score(halfTurns: final))
-        if CoinSceneView.reduceMotion {
-            counterIsRecord = recordToBeat > 0 && score(halfTurns: final) > recordToBeat
-            withAnimation(.linear(duration: 0.25)) { counterHalfTurns = final }
-        } else {
-            guard counterHalfTurns != nil else { return }
-            if counterHalfTurns != final { counterStep(final) }
-            if counterIsRecord { counterRecordLanded = true }
-        }
-        let hold: Double = counterIsRecord ? 2.6 : 1.3
-        DispatchQueue.main.asyncAfter(deadline: .now() + hold) {
+        controller.recordScore(FlipScore.final(speed: scoreSpeed))
+        if answer == nil || answerBurnStart != nil { showAnswer() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.answerHold) {
             guard id == counterID else { return }
-            withAnimation(.easeOut(duration: 0.6)) { counterHalfTurns = nil }
+            burnAnswer(seconds: 1.4)
+        }
+    }
+
+    /// 抽一句，淡淡浮现
+    private func showAnswer() {
+        answerToken += 1
+        answer = answerDeck.draw()
+        answerBurnStart = nil
+        answerShown = false
+        withAnimation(.easeIn(duration: CoinSceneView.reduceMotion ? 0.3 : 1.0)) { answerShown = true }
+    }
+
+    /// 把当前这句烧掉（减少动态效果下只淡出）。烧完从屏幕上拿走
+    private func burnAnswer(seconds: Double) {
+        guard answer != nil, answerBurnStart == nil else { return }
+        let token = answerToken
+        if CoinSceneView.reduceMotion {
+            withAnimation(.easeOut(duration: 0.3)) { answerShown = false }
+        } else {
+            answerBurnSeconds = seconds
+            answerBurnStart = Date()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+            guard token == answerToken else { return }
+            answer = nil
+            answerBurnStart = nil
+            answerShown = false
         }
     }
 
