@@ -41,6 +41,8 @@ enum CoinScene {
     static let lookUpNear: Float = 0
 
     static let fieldOfView: Float = 40
+    /// 竖屏的宽高比（宽 ÷ 高）。iPhone X 以后都是 0.46 左右；老款更宽，墙就略往里，更不会出画
+    static let screenAspect: Float = 0.46
 
     /// 推近用多久（秒）。慢，才有端到眼前的从容感
     static let zoomInSeconds: Double = 1.1
@@ -335,6 +337,10 @@ final class CoinSceneState {
     var cameraShift = SIMD2<Float>(0, 0)
     var onShakeTap: () -> Void = {}
     var onWallKnock: (Float) -> Void = { _ in }
+    /// 猛摇时满屏乱撞（2026-10）。不为空就是正在乱撞，硬币的位置、朝向全听它的
+    var chaos: ChaosModel?
+    /// 开始 / 结束乱撞时告诉外面（乱撞中不接受上划）
+    var onChaos: (Bool) -> Void = { _ in }
     /// 翻过一个半圈就报一次"现在翻了几个半圈"（2026-10 计数）
     var onHalfTurn: (Int) -> Void = { _ in }
     /// 上一次报出去的半圈数，没变就不报，免得每帧都去动界面
@@ -389,6 +395,8 @@ struct CoinSceneView: View {
     var onShakeTap: () -> Void = {}
     /// 左右甩时硬币撞到边：声音加震动，轻重随撞击（P13）
     var onWallKnock: (Float) -> Void = { _ in }
+    /// 猛摇开始满屏乱撞 / 乱撞结束（2026-10）。乱撞中外面要挡住上划
+    var onChaos: (Bool) -> Void = { _ in }
     /// 抛掷中每翻过半圈调一次，交出"已经翻了几个半圈"。屏幕上的计数靠它跳（2026-10）
     var onHalfTurn: (Int) -> Void = { _ in }
 
@@ -478,6 +486,11 @@ struct CoinSceneView: View {
                 }
                 state.phase = phase
                 state.finishReported = false
+                if state.chaos != nil {               // 保险：真要抛了，乱撞立刻让位
+                    state.chaos = nil
+                    let report = state.onChaos
+                    DispatchQueue.main.async { report(false) }
+                }
                 state.lastHalfTurnReported = -1
                 state.lastActivity = Date()
                 state.pullBackStart = nil
@@ -510,6 +523,7 @@ struct CoinSceneView: View {
             state.flipDirection = flipDirection
             state.onShakeTap = onShakeTap
             state.onWallKnock = onWallKnock
+            state.onChaos = onChaos
             state.onHalfTurn = onHalfTurn
             if let scale = pinchScale {
                 if !state.pinching {
@@ -831,8 +845,9 @@ struct CoinSceneView: View {
 
         let er = elevation * .pi / 180
         let yr = yaw * .pi / 180
-        // 硬币被歪手机滑开了：镜头的中心缓缓跟过去（P13），特写时也不出画
-        if let coin = state.coin {
+        // 硬币被歪手机滑开了：镜头的中心缓缓跟过去（P13），特写时也不出画。
+        // 满屏乱撞时镜头不动（作者定的），盒子的墙就是镜头的四条边，镜头一动墙就歪了
+        if let coin = state.coin, state.chaos == nil {
             let target = SIMD2<Float>(coin.position.x, coin.position.z)
             let k = Float(1 - exp(-dt / CoinScene.cameraFollowSeconds))
             state.cameraShift += (target - state.cameraShift) * k
@@ -882,6 +897,7 @@ struct CoinSceneView: View {
     /// 硬币滑开后镜头会跟过去（见 updateCamera），所以特写时也不会出画。
     private func updateShake(dt: Double) {
         let reading = state.sensor.read(dt: dt)
+        if updateChaos(dt: dt, reading: reading) { return }
         var enabled = !Self.reduceMotion && !state.dragging && state.dragUp == 0
             && !state.pinching && state.lift < 0.001
             && CoinScene.shakeAllowed(zoom: state.zoom)
@@ -907,6 +923,66 @@ struct CoinSceneView: View {
         if state.shake.hopLanded { state.onShakeTap() }
     }
 
+    /// 猛摇手机：满屏乱撞（2026-10）。返回 true 表示这一帧由乱撞接管，小滑小颠不用再算。
+    ///
+    /// ★ 镜头不动（作者定的）★：盒子的墙就是此刻镜头看到的四条边。特写时猛摇，
+    /// 先退回远景，退到位再开始撞。
+    private func updateChaos(dt: Double, reading: ShakeSensor.Reading) -> Bool {
+        guard let camera = state.camera else { return false }
+        let q = camera.orientation(relativeTo: nil)
+        let right = q.act([1, 0, 0]), up = q.act([0, 1, 0]), back = q.act([0, 0, 1])
+        // 手机自己的 右、上、朝向用户，正好就是镜头的 x、y、z
+        let accel = right * reading.jerk.x + up * reading.jerk.y + back * reading.jerk.z
+
+        if var chaos = state.chaos {
+            chaos.step(dt: Float(dt), accel: accel)
+            if chaos.impact > 0 { state.onWallKnock(chaos.impact) }
+            if chaos.isDone {
+                state.shake.place(at: SIMD2<Float>(chaos.position.x, chaos.position.z))
+                state.restYaw = chaos.yaw * 180 / .pi
+                state.levelTilt = .zero
+                state.chaos = nil
+                let report = state.onChaos
+                DispatchQueue.main.async { report(false) }
+            } else {
+                state.chaos = chaos
+            }
+            return true
+        }
+
+        // 要不要开始：只在硬币静静躺着、没人碰、没开"减少动态效果"时
+        guard simd_length(reading.jerk) > ChaosModel.startAccel, !Self.reduceMotion,
+              !state.dragging, state.dragUp == 0, !state.pinching, state.lift < 0.001,
+              state.spinVelocity == 0 else { return false }
+        switch state.phase {
+        case .flipping: return false
+        case .resting where !state.holdFar:
+            // 特写：先快退回远景（不走慢慢退的那条路）
+            state.holdFar = true
+            state.pullBackStart = nil
+            state.lastActivity = Date()
+            return false
+        default: break
+        }
+        guard CoinScene.shakeAllowed(zoom: state.zoom), let coin = state.coin else { return false }
+
+        let tanV = tan(CoinScene.fieldOfView / 2 * .pi / 180)
+        let walls = ChaosModel.frustumWalls(camera: camera.position(relativeTo: nil),
+                                            forward: -back, up: up, right: right,
+                                            tanV: tanV, tanH: tanV * CoinScene.screenAspect)
+        state.chaos = ChaosModel(position: coin.position,
+                                 yaw: state.restYaw * .pi / 180,
+                                 kick: accel,
+                                 radius: CoinScene.coinRadius,
+                                 thickness: CoinScene.coinThickness,
+                                 walls: walls,
+                                 homeRadius: ShakeModel.maxOffset)
+        state.levelTilt = .zero
+        let report = state.onChaos
+        DispatchQueue.main.async { report(true) }
+        return true
+    }
+
     /// 两头都软的 0→1 曲线
     static func smooth(_ x: Double) -> Double {
         let p = min(max(x, 0), 1)
@@ -916,6 +992,7 @@ struct CoinSceneView: View {
     /// 现在算不算"远景、没人碰"：这时才有游移和呼吸
     private var isIdleFar: Bool {
         if Self.reduceMotion || state.dragging || state.dragUp > 10 || state.pinching { return false }
+        if state.chaos != nil { return false }      // 乱撞时镜头不游移，墙才不会跟着晃
         switch state.phase {
         case .waiting: return true
         case .resting: return state.holdFar
@@ -1089,6 +1166,14 @@ struct CoinSceneView: View {
     /// 提起的同时让它歪一点，像被从桌面上掀起一角——
     /// 纯粹平移上升看着像"浮空"，加一点倾斜才有被捏住的实感。
     private func applyLift(to coin: Entity, face: CoinFace) {
+        // 满屏乱撞中（2026-10）：位置、朝向全听乱撞的
+        if let chaos = state.chaos {
+            coin.position = chaos.position
+            coin.transform.rotation = chaos.orientation * Self.restingRotation(for: face)
+            state.contactHeight = max(chaos.lowestHeight, 0)
+            state.coinTilt = chaos.tiltDegrees
+            return
+        }
         // 摇手机（P13）：贴地滑开 + 离地一点点的小颠
         // 水平仪让硬币歪着时，一边贴着玻璃、另一边抬起，圆心要跟着抬高，不能沉进地面
         let levelAngle = simd_length(state.levelTilt)

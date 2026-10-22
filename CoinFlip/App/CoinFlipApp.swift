@@ -75,6 +75,9 @@ struct RootView: View {
     /// 这一划的速度，就是这一抛的分数
     @State private var scoreSpeed: Double = 0
 
+    /// 硬币正在满屏乱撞（2026-10）。这时候不接受上划、横拨
+    @State private var chaosActive = false
+
     /// 声音与震动
     @State private var feedback = FeedbackPlayer()
 
@@ -101,6 +104,7 @@ struct RootView: View {
                 flipDirection: flipDirection,
                 onShakeTap: { feedback.shakeTap() },
                 onWallKnock: { feedback.wallKnock(impact: $0) },
+                onChaos: { chaosActive = $0 },
                 onHalfTurn: { counterStep($0) }
             )
 
@@ -123,7 +127,7 @@ struct RootView: View {
 
                 // 蓄力：往上拖时手上一格一格地"嗒"，越往上越重（2026-10）。
                 // 只在能抛的时候、而且明显是往上拖（不是横拨）时才震。
-                if controller.phase.acceptsFlip && dragUp > abs(dragSide) {
+                if controller.phase.acceptsFlip && !chaosActive && dragUp > abs(dragSide) {
                     feedback.charge(dragUp: dragUp)
                 }
 
@@ -133,6 +137,9 @@ struct RootView: View {
                 dragSide = 0
                 dragging = false
                 warmedUp = false
+
+                // 硬币正在满屏乱撞：等它躺下再说，这一划不算
+                if chaosActive { return }
 
                 // ⚠️ 必须先问上划、再问横拨。两者的允许范围有一小段重叠，
                 //    重叠时按上划算——想抛却被判成拨，比反过来更让人恼火。

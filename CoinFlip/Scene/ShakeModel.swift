@@ -191,6 +191,13 @@ struct ShakeModel {
         return (c / s, min(angle, limit))
     }
 
+    /// 乱撞（ChaosModel）收尾后，把硬币交回来：停在它躺下的地方，静止（2026-10）
+    mutating func place(at point: SIMD2<Float>) {
+        self = ShakeModel()
+        let r = simd_length(point)
+        offset = r > Self.maxOffset ? point / r * Self.maxOffset : point
+    }
+
     /// 一抛出去就清零：飞行接管硬币，起飞时的偏移由画面那边慢慢收回中间
     mutating func reset() {
         self = ShakeModel()
