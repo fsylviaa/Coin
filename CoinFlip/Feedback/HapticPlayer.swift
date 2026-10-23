@@ -26,27 +26,32 @@ enum HapticTuning {
     /// 总强度倍数。觉得整体太轻或太重，**先调这一个**。
     /// 1.0 是标准，1.3 偏重，0.7 偏轻。超过 1.0 的部分会被系统截断，
     /// 所以调到 1.5 以上基本不会再有变化。
+    ///
+    /// ★ 2026-10 用户反映震感不够，这次没有动 gain ★：gain 一过 1，大跳落回那一下也会被
+    ///   截成满格，和落地一样重，"落地最重、越往后越轻"的层次就没了（HapticTests 守着这条）。
+    ///   所以改的是下面各项：最轻的一下抬高（floor）、落地的闷响更重更长、脱手、自旋刻度、
+    ///   蓄力、破纪录那两下都加重。
     static let gain: Float = 1.0
 
     /// 最轻的一下也至少有这么强。
     /// 这是让"嗒嗒嗒"那串能被摸到的关键——真按原始强度来，后面七下是 0。
-    static let floor: Float = 0.32
+    static let floor: Float = 0.42      // 2026-10 用户反映震感不够：0.32 → 0.42
 
     /// 强度曲线的弯曲程度。越小，弱的磕碰被抬得越高、整串越平均；
     /// 越大，落地和磕碰的轻重差别越明显。
     static let curve: Float = 0.6
 
     /// 落地那一记后面跟的闷响有多长（秒）。它提供"重量感"。
-    static let thudSeconds: Double = 0.09
+    static let thudSeconds: Double = 0.12   // 2026-10 加重：0.09 → 0.12
     /// 闷响的强弱
-    static let thudIntensity: Float = 0.55
+    static let thudIntensity: Float = 0.75  // 2026-10 加重：0.55 → 0.75
 
     /// 脱手那一下的轻点提示
-    static let tossIntensity: Float = 0.45
+    static let tossIntensity: Float = 0.6   // 2026-10 加重：0.45 → 0.6
 
     /// 自旋每转过一个刻度响一下的轻重。
     /// 它很密，所以要很轻——靠疏密表达转速，不靠轻重。
-    static let spinTickIntensity: Float = 0.30
+    static let spinTickIntensity: Float = 0.40   // 2026-10 加重：0.30 → 0.40
 
     /// 比这还轻的磕碰就不震了，免得糊成一片
     static let minStrength: Double = 0.02
@@ -75,7 +80,7 @@ enum HapticTuning {
 
     /// 蓄力每一格的轻重：最开头几乎摸不到，越往上拖越重。level 是 0~1。
     static func chargeIntensity(_ level: Float) -> Float {
-        clamp((0.14 + 0.46 * pow(min(max(level, 0), 1), 1.3)) * gain)
+        clamp((0.22 + 0.5 * pow(min(max(level, 0), 1), 1.3)) * gain)   // 2026-10 加重
     }
 
     /// 蓄力每一格的软硬：越往上越脆，像弹簧越拧越紧。
@@ -84,7 +89,7 @@ enum HapticTuning {
     }
 
     /// 拖满那一下：明显重一截、偏沉，告诉手"到头了"
-    static let chargeFullIntensity: Float = 0.85
+    static let chargeFullIntensity: Float = 0.95    // 2026-10 加重：0.85 → 0.95
     static let chargeFullSharpness: Float = 0.35
 
     /// 松手那一记：抛得越狠越重（force 是 0~1，按抛起高度算）
@@ -287,7 +292,7 @@ final class HapticPlayer {
                                            .init(parameterID: .hapticSharpness, value: 0.4)],
                               relativeTime: at)
             }
-            if let pattern = try? CHHapticPattern(events: [hit(0, 0.95), hit(0.09, 0.7)], parameters: []) {
+            if let pattern = try? CHHapticPattern(events: [hit(0, 1.0), hit(0.09, 0.85)], parameters: []) {
                 recordPlayer = try? engine.makePlayer(with: pattern)
             }
         }
