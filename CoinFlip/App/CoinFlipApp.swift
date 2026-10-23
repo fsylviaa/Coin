@@ -81,6 +81,15 @@ struct RootView: View {
 
     /// 硬币正在满屏乱撞（2026-10）。这时候不接受上划、横拨
     @State private var chaosActive = false
+    // ── 乱撞计数（2026-10）──
+    /// 屏幕上显示这一阵撞了几下；nil 表示不显示
+    @State private var chaosHits: Int?
+    /// 这一阵开始前的"最多连撞"。0 表示还没有纪录，这一阵不算破纪录
+    @State private var chaosRecordToBeat = 0
+    @State private var chaosIsRecord = false
+    @State private var chaosRecordLanded = false
+    /// 每一阵一个编号，淡出是延时做的，对不上说明又开始了新的一阵
+    @State private var chaosID = 0
 
     /// 声音与震动
     @State private var feedback = FeedbackPlayer()
@@ -108,7 +117,8 @@ struct RootView: View {
                 flipDirection: flipDirection,
                 onShakeTap: { feedback.shakeTap() },
                 onWallKnock: { feedback.wallKnock(impact: $0) },
-                onChaos: { chaosActive = $0 },
+                onChaos: { chaosChanged($0) },
+                onChaosHit: { chaosHit() },
                 onHalfTurn: { counterStep($0) }
             )
 
@@ -212,6 +222,14 @@ struct RootView: View {
                     AnswerView(answer: a, burnStart: answerBurnStart, burnSeconds: answerBurnSeconds)
                         .opacity(answerShown ? 1 : 0)
                         .position(x: geo.size.width / 2, y: geo.size.height * 0.80)
+                }
+                // 满屏乱撞的计数：就在答案的位置（作者要的：答案还挂着就快速烧掉让位）。
+                // 底部那行 Coin: Luna 不动
+                if let n = chaosHits {
+                    TurnCounter(text: n.formatted(), value: Double(n),
+                                isRecord: chaosIsRecord, recordLanded: chaosRecordLanded)
+                        .position(x: geo.size.width / 2, y: geo.size.height * 0.80)
+                        .transition(.opacity)
                 }
             }
             .ignoresSafeArea()
@@ -351,6 +369,42 @@ extension RootView {
             answer = nil
             answerBurnStart = nil
             answerShown = false
+        }
+    }
+
+    // MARK: - 满屏乱撞的计数（2026-10）
+
+    /// 乱撞开始 / 结束
+    private func chaosChanged(_ active: Bool) {
+        chaosActive = active
+        if active {
+            chaosID += 1
+            chaosRecordToBeat = controller.stats.maxChaosHits
+            chaosIsRecord = false
+            chaosRecordLanded = false
+            burnAnswer(seconds: 0.6)                         // 答案让位
+            withAnimation(.easeOut(duration: 0.2)) { chaosHits = 0 }
+        } else {
+            let id = chaosID
+            let n = chaosHits ?? 0
+            controller.recordChaosHits(n)
+            if chaosIsRecord { chaosRecordLanded = true }    // 停下来：破了纪录就扫光、荡金环
+            let hold: Double = chaosIsRecord ? 2.6 : 1.3
+            DispatchQueue.main.asyncAfter(deadline: .now() + hold) {
+                guard id == chaosID else { return }
+                withAnimation(.easeOut(duration: 0.6)) { chaosHits = nil }
+            }
+        }
+    }
+
+    /// 乱撞中又撞了一下
+    private func chaosHit() {
+        guard chaosActive, let n = chaosHits else { return }
+        withAnimation(.snappy(duration: 0.12)) { chaosHits = n + 1 }
+        // 越过"最多连撞"的那一刻
+        if chaosRecordToBeat > 0, n + 1 > chaosRecordToBeat, !chaosIsRecord {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { chaosIsRecord = true }
+            feedback.recordBroken()
         }
     }
 

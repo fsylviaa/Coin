@@ -33,5 +33,16 @@ final class FlipScoreTests: XCTestCase {
         let s = try JSONDecoder().decode(FlipStats.self, from: old)
         XCTAssertEqual(s.total, 3)
         XCTAssertEqual(s.maxSpeed, 0)
+        XCTAssertEqual(s.maxChaosHits, 0)
+    }
+
+    /// 乱撞计数的纪录只留最多的那次
+    func testChaosHitsKeepsBest() {
+        var s = FlipStats()
+        s.recordChaosHits(12)
+        s.recordChaosHits(5)
+        XCTAssertEqual(s.maxChaosHits, 12)
+        s.recordChaosHits(30)
+        XCTAssertEqual(s.maxChaosHits, 30)
     }
 }

@@ -207,6 +207,7 @@ struct RecordCard: View {
                 row("转得最多的一抛", "\(FlipStats.turnsText(halfTurns: stats.maxHalfTurns)) 圈")
                 row("一共翻了", "\(FlipStats.turnsText(halfTurns: stats.totalHalfTurns)) 圈")
                 row("最快一划", "\(stats.maxSpeed.formatted())")
+                row("最多连撞", "\(stats.maxChaosHits.formatted()) 下")
             }
 
             hairline

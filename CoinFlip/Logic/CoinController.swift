@@ -117,6 +117,13 @@ final class CoinController {
         store.saveStats(stats)
     }
 
+    /// 一阵满屏乱撞停下来，撞了 n 下（2026-10）。破了纪录才需要存
+    func recordChaosHits(_ n: Int) {
+        guard n > stats.maxChaosHits else { return }
+        stats.recordChaosHits(n)
+        store.saveStats(stats)
+    }
+
     /// 卡片上点"清零"并确认后调用。只清记录，不动"最后一次结果"。
     func resetStats() {
         stats = FlipStats()

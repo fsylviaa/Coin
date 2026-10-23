@@ -341,6 +341,8 @@ final class CoinSceneState {
     var chaos: ChaosModel?
     /// 开始 / 结束乱撞时告诉外面（乱撞中不接受上划）
     var onChaos: (Bool) -> Void = { _ in }
+    /// 乱撞中每撞一下（屏幕边或玻璃）告诉外面，用来计数（2026-10）
+    var onChaosHit: () -> Void = {}
     /// 翻过一个半圈就报一次"现在翻了几个半圈"（2026-10 计数）
     var onHalfTurn: (Int) -> Void = { _ in }
     /// 上一次报出去的半圈数，没变就不报，免得每帧都去动界面
@@ -397,6 +399,8 @@ struct CoinSceneView: View {
     var onWallKnock: (Float) -> Void = { _ in }
     /// 猛摇开始满屏乱撞 / 乱撞结束（2026-10）。乱撞中外面要挡住上划
     var onChaos: (Bool) -> Void = { _ in }
+    /// 乱撞中每撞一下（2026-10 计数）
+    var onChaosHit: () -> Void = {}
     /// 抛掷中每翻过半圈调一次，交出"已经翻了几个半圈"。屏幕上的计数靠它跳（2026-10）
     var onHalfTurn: (Int) -> Void = { _ in }
 
@@ -524,6 +528,7 @@ struct CoinSceneView: View {
             state.onShakeTap = onShakeTap
             state.onWallKnock = onWallKnock
             state.onChaos = onChaos
+            state.onChaosHit = onChaosHit
             state.onHalfTurn = onHalfTurn
             if let scale = pinchScale {
                 if !state.pinching {
@@ -936,7 +941,12 @@ struct CoinSceneView: View {
 
         if var chaos = state.chaos {
             chaos.step(dt: Float(dt), accel: accel)
-            if chaos.impact > 0 { state.onWallKnock(chaos.impact) }
+            if chaos.impact > 0 {
+                state.onWallKnock(chaos.impact)
+                // 计数要改界面，挪到这一帧画完之后，别在渲染回调里当场改
+                let hit = state.onChaosHit
+                DispatchQueue.main.async { hit() }
+            }
             if chaos.isDone {
                 state.shake.place(at: SIMD2<Float>(chaos.position.x, chaos.position.z))
                 state.restYaw = chaos.yaw * 180 / .pi
