@@ -26,7 +26,7 @@ struct DragOutcome: Equatable {
     let translation: CGSize
     /// 整个手势里往上最快的那一下
     let upVelocity: CGSize
-    /// 整个手势里横向最快的那一下（往右为正）
+    /// 横向最快的那一下（往右为正）。只看松手前最后 0.12 秒（2026-10）
     let sideVelocity: CGSize
 }
 
@@ -213,7 +213,10 @@ final class TouchTrackingView: UIView {
         onDragChanged?(.zero)              // 手指离开，硬币不再被牵着
         onDragEnded?(DragOutcome(translation: translation,
                                  upVelocity: peakVelocity(.up),
-                                 sideVelocity: peakVelocity(.side)))
+                                 // ★ 横向只看松手前最后一小段 ★（2026-10）：按住来回拨的时候，
+                                 // 取整个手势的峰值会拿到早先某一下（甚至方向相反），松手那一刻
+                                 // 硬币会突然换个速度、换个方向转起来，作者说"不太顺畅"
+                                 sideVelocity: peakVelocity(.side, since: endTime - releaseWindow)))
     }
 
     private enum Axis { case up, side }
@@ -225,13 +228,16 @@ final class TouchTrackingView: UIView {
     ///
     /// 两个方向要分开取峰值：一次上划里横向可能在某一瞬间也很快（手抖），
     /// 合在一起取会互相污染。
-    private func peakVelocity(_ axis: Axis) -> CGSize {
+    /// 横拨松手时，只看最后这么久里的速度（秒）
+    private let releaseWindow: TimeInterval = 0.12
+
+    private func peakVelocity(_ axis: Axis, since: TimeInterval = -.infinity) -> CGSize {
         guard samples.count >= 2 else { return .zero }
 
         var best = CGSize.zero
         var bestScore: CGFloat = 0
 
-        for (i, later) in samples.enumerated() {
+        for (i, later) in samples.enumerated() where later.time >= since {
             // 往回找一个间隔够长的取样点作参照
             var j = i - 1
             while j > 0 && later.time - samples[j].time < velocitySpan { j -= 1 }

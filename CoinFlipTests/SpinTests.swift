@@ -62,6 +62,23 @@ final class SpinTests: XCTestCase {
         }
     }
 
+    /// ★ 停得平顺 ★（2026-10，作者说偶尔停得突然）：最后一帧不会从一个看得出的速度一下变成 0，
+    /// 每一帧掉的速度也不会突然变大
+    func testSpinStopsSmoothly() {
+        var v: Float = 300
+        var lastDrop: Float?
+        while v != 0 {
+            let next = CoinSceneView.decayedSpin(v, dt: 1.0 / 60)
+            let drop = abs(v) - abs(next)
+            if let last = lastDrop {
+                XCTAssertLessThanOrEqual(drop, last + 0.05, "转速 \(v) 时一帧掉得比上一帧多，像被刹了一下")
+            }
+            if next == 0 { XCTAssertLessThan(abs(v), 1.5, "从 \(v)°/秒 一下停住，停得太突然") }
+            lastDrop = drop
+            v = next
+        }
+    }
+
     /// 往左拨就往左转，方向不会被衰减弄反
     func testSpinKeepsItsDirection() {
         var v = -CoinScene.spinMaxSpeed

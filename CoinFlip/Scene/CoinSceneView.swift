@@ -153,8 +153,9 @@ enum CoinScene {
     static let spinMaxSpeed: Float = 900
     /// 转速掉到十分之一需要多少秒。越大转得越久
     static let spinDecaySeconds: Double = 2.1
-    /// 慢到这个角速度就算停了，免得无限趋近永远不停
-    static let spinStopSpeed: Float = 10
+    /// 慢到这个角速度以下，改成匀减速滑到停（2026-10）。
+    /// 原来是慢到 10°/秒就直接归零，作者说"偶尔停得突然"
+    static let spinGlideSpeed: Float = 45
     /// 每转过多少度，手上响一下轻微的震动
     static let spinTickDegrees: Float = 60
     /// 两次震动之间至少隔多久。转太快时宁可少震几下，也不能让震动把画面拖住
@@ -266,6 +267,9 @@ final class CoinSceneState {
     var spinVelocity: Float = 0
     /// 手指按下那一刻的转角。拖动期间以它为基准跟手
     var yawAtTouchDown: Float = 0
+    /// 这一次手势已经认定是在拨了（2026-10）。认定之后整个手势都完全跟手，
+    /// 来回拨的时候不会因为手指稍微往上偏、经过中间，就忽跟忽不跟
+    var spinLatched = false
     /// 手指此刻横向拖了多少点
     var dragSide: CGFloat = 0
     var dragging = false
@@ -513,6 +517,7 @@ struct CoinSceneView: View {
                 if dragging {
                     state.yawAtTouchDown = state.restYaw
                     state.spinVelocity = 0
+                    state.spinLatched = false
                 }
             }
 
@@ -684,7 +689,13 @@ struct CoinSceneView: View {
             // 跟手：手指划到哪，硬币就转到哪。以按下那一刻的角度为基准。
             // ★ 只在"像在拨"的时候跟着转（P09）。★ 斜着往上划要抛时，手指也在横向走，
             //   原来硬币会先原地拧一截、脱手又被清零再斜着翻，作者看着"跟横拨打架"。
-            let follow = Self.spinFollowWeight(dragUp: state.dragUp, dragSide: state.dragSide)
+            //
+            // ★ 一旦完全跟上手（认定是在拨），这一整次手势就一直完全跟手 ★（2026-10）。
+            //   原来每帧都按"从按下到现在"的方向重新算跟几成：按住来回拨时，手指一经过中间、
+            //   又稍微往上偏了一点，跟手比例就从 1 掉到 0 再升回来，硬币一顿一顿地往回缩。
+            let weight = Self.spinFollowWeight(dragUp: state.dragUp, dragSide: state.dragSide)
+            if weight >= 1 { state.spinLatched = true }
+            let follow = state.spinLatched ? 1 : weight
             state.restYaw = state.yawAtTouchDown
                 + Float(state.dragSide) * CoinScene.spinPerPoint * follow
         } else if state.spinVelocity != 0 {
@@ -714,8 +725,17 @@ struct CoinSceneView: View {
     static func decayedSpin(_ velocity: Float, dt: Double) -> Float {
         // 衰减到十分之一要 spinDecaySeconds 秒，换算成指数衰减的时间常数
         let tau = CoinScene.spinDecaySeconds / log(10)
-        let next = velocity * Float(exp(-dt / tau))
-        return abs(next) < CoinScene.spinStopSpeed ? 0 : next
+        let speed = abs(velocity)
+        let glide = CoinScene.spinGlideSpeed
+        if speed > glide {
+            // 快的时候按比例衰减（越快掉得越多）
+            return velocity * Float(exp(-dt / tau))
+        }
+        // 慢下来以后匀减速滑到 0：减速度正好接上指数衰减在 glide 那一刻的减速度，
+        // 所以看不出换挡；最后是轻轻停住，不是一下刹死
+        let decel = glide / Float(tau)
+        let next = max(speed - decel * Float(dt), 0)
+        return velocity < 0 ? -next : next
     }
 
     /// 每转过一个刻度，手上响一下。

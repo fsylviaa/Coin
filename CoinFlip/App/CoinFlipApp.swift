@@ -193,6 +193,12 @@ struct RootView: View {
                     translation: drag.translation, velocity: drag.sideVelocity
                 ), controller.phase.acceptsFlip {
                     spinImpulse = SpinImpulse(sideSpeed: speed)
+                } else if controller.phase.acceptsFlip,
+                          abs(drag.sideVelocity.width) >= 40,
+                          abs(drag.sideVelocity.width) > abs(drag.sideVelocity.height) {
+                    // 按住来回拨、松手时手还在横着动，只是不够算一"拨"：
+                    // 顺着手的速度轻轻带一下再滑停，不要原地刹死（2026-10）
+                    spinImpulse = SpinImpulse(sideSpeed: Double(drag.sideVelocity.width))
                 }
                 // 两样都不算：硬币会自己缓缓落回平面
             } onDragCancelled: {
