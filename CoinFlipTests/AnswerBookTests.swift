@@ -7,7 +7,7 @@ final class AnswerBookTests: XCTestCase {
 
     /// 每一句都中英成对、不空、够短（一眼读完），而且不重复
     func testEntries() {
-        XCTAssertGreaterThanOrEqual(AnswerBook.all.count, 200)
+        XCTAssertGreaterThanOrEqual(AnswerBook.all.count, 400)
         var seen = Set<String>()
         for a in AnswerBook.all {
             XCTAssertFalse(a.zh.isEmpty); XCTAssertFalse(a.en.isEmpty)
