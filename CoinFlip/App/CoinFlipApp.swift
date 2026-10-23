@@ -88,6 +88,8 @@ struct RootView: View {
     @State private var chaosRecordToBeat = 0
     @State private var chaosIsRecord = false
     @State private var chaosRecordLanded = false
+    /// 过关那一下的弹跳
+    @State private var chaosPulse = false
     /// 每一阵一个编号，淡出是延时做的，对不上说明又开始了新的一阵
     @State private var chaosID = 0
 
@@ -233,7 +235,8 @@ struct RootView: View {
                 // 底部那行 Coin: Luna 不动
                 if let n = chaosHits {
                     TurnCounter(text: n.formatted(), value: Double(n),
-                                isRecord: chaosIsRecord, recordLanded: chaosRecordLanded)
+                                isRecord: chaosIsRecord, recordLanded: chaosRecordLanded,
+                                heat: TurnCounter.heat(hits: n), pulse: chaosPulse)
                         .position(x: geo.size.width / 2, y: geo.size.height * 0.80)
                         .transition(.opacity)
                 }
@@ -407,6 +410,14 @@ extension RootView {
     private func chaosHit() {
         guard chaosActive, let n = chaosHits else { return }
         withAnimation(.snappy(duration: 0.12)) { chaosHits = n + 1 }
+        // 过关：数字弹一下，手上一记重的，声音亮一点
+        if TurnCounter.isMilestone(n + 1) {
+            withAnimation(.spring(response: 0.18, dampingFraction: 0.5)) { chaosPulse = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { chaosPulse = false }
+            }
+            feedback.chaosMilestone()
+        }
         // 越过"最多连撞"的那一刻
         if chaosRecordToBeat > 0, n + 1 > chaosRecordToBeat, !chaosIsRecord {
             withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { chaosIsRecord = true }

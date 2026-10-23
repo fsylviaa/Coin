@@ -140,6 +140,12 @@ final class FeedbackPlayer {
         chargeStep = 0
     }
 
+    /// 满屏乱撞过关（10、25、50、100……，2026-10）：一记重的震，加一声亮一点的
+    func chaosMilestone() {
+        playSound(volume: 0.6)
+        haptics.chargeTick(step: ChargeMeter.steps)   // 借蓄力"拖满"那一下：重、偏沉
+    }
+
     /// 这一抛在空中越过了旧纪录（2026-10 计数）
     func recordBroken() {
         haptics.recordBroken()

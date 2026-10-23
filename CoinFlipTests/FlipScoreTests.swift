@@ -45,4 +45,20 @@ final class FlipScoreTests: XCTestCase {
         s.recordChaosHits(30)
         XCTAssertEqual(s.maxChaosHits, 30)
     }
+
+    /// 乱撞计数升温：只升不降，100 下满；过关的数对
+    func testChaosHeatAndMilestones() {
+        XCTAssertEqual(TurnCounter.heat(hits: 0), 0)
+        XCTAssertEqual(TurnCounter.heat(hits: 100), 1, accuracy: 1e-9)
+        XCTAssertEqual(TurnCounter.heat(hits: 500), 1)
+        var last = -1.0
+        for n in 0...120 {
+            let h = TurnCounter.heat(hits: n)
+            XCTAssertGreaterThanOrEqual(h, last)
+            last = h
+        }
+        XCTAssertGreaterThan(TurnCounter.heat(hits: 10), 0.4, "10 下还几乎没变化，升温太慢")
+        let laps = (1...350).filter(TurnCounter.isMilestone)
+        XCTAssertEqual(laps, [10, 25, 50, 100, 200, 300])
+    }
 }
