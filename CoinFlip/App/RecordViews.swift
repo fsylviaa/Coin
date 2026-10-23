@@ -202,10 +202,7 @@ struct RecordCard: View {
 
             VStack(spacing: 13) {
                 row("当前连续", "\(faceName(stats.lastFace)) · \(stats.streak) 次")
-                row("最长连续", "\(stats.longestStreak) 次")
-                row("今天", "\(stats.today(now)) 次")
-                row("转得最多的一抛", "\(FlipStats.turnsText(halfTurns: stats.maxHalfTurns)) 圈")
-                row("一共翻了", "\(FlipStats.turnsText(halfTurns: stats.totalHalfTurns)) 圈")
+                row("今日抛掷", "\(stats.today(now)) 次")
                 row("最快一划", "\(stats.maxSpeed.formatted())")
                 row("最多连撞", "\(stats.maxChaosHits.formatted()) 下")
             }
