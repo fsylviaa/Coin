@@ -1,0 +1,22 @@
+Copyright © 2026 付诗扬 F·Sylvia. All rights reserved.
+
+版权所有 © 2026 付诗扬 F·Sylvia。保留所有权利。
+
+本仓库公开仅供查看。仓库中的全部内容——包括但不限于源代码、硬币图案与贴图、
+App 图标、音效、"答案"文字（452 句中英双语短句）、名称"Coin""Coin·答案硬币"
+及界面文案——均为作者原创作品。未经作者书面许可，任何人不得复制、修改、分发、
+出售，或用于发布任何 App 或其他产品。
+
+This repository is public for viewing only. All contents — including but not
+limited to the source code, coin artwork and textures, app icon, sound effects,
+the answer texts (452 bilingual lines), the names "Coin" and "Coin·答案硬币",
+and the interface copy — are original works of the author. No part may be
+copied, modified, distributed, sold, or used to publish any app or other
+product without the author's prior written permission.
+
+第三方说明 / Third-party notice
+硬币贴图上的拉丁文字由开源字体 DejaVu Serif 渲染成图片，该字体按 Bitstream Vera
+授权使用（字体文件本身不包含在 App 中）。界面使用苹果系统字体与系统框架。
+The Latin lettering on the coin textures was rendered with the DejaVu Serif
+font (Bitstream Vera license); the font files are not included in the app.
+The interface uses Apple system fonts and frameworks.

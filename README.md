@@ -91,3 +91,9 @@ cd 你放项目的位置/CoinFlip     # 例如：cd ~/Desktop/CoinFlip
 
 - **提示 `Permission denied`**：运行 `chmod +x scripts/*.sh` 后重试。
 - **提示没有找到 Xcode**：运行 `sudo xcode-select -s /Applications/Xcode.app`。
+
+---
+
+## 版权
+
+© 2026 付诗扬 F·Sylvia，保留所有权利。本仓库公开仅供查看，未经作者书面许可不得复制、修改、分发或用于发布任何产品。详见 [LICENSE](LICENSE)。
